@@ -1,0 +1,89 @@
+# 企业知识库中台 1.0 —— 完整部署编排
+# 一键启动：docker compose up -d --build
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: rag-postgres
+    environment:
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag123456
+      POSTGRES_DB: rag_zhongtai
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d rag_zhongtai"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: rag-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    container_name: rag-backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://rag:rag123456@postgres:5432/rag_zhongtai
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      # 向量维度需与所选 embedding 模型一致（通义 v3/v4 默认 1024）
+      EMBEDDING_DIM: "1024"
+      UPLOAD_DIR: /app/data/uploads
+      PARSED_DIR: /app/data/parsed
+    volumes:
+      - rag_data:/app/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build: ./backend
+    container_name: rag-worker
+    command: celery -A app.celery_app.celery_app worker --loglevel=info --pool=threads --concurrency=4
+    environment:
+      DATABASE_URL: postgresql+psycopg://rag:rag123456@postgres:5432/rag_zhongtai
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      EMBEDDING_DIM: "1024"
+      UPLOAD_DIR: /app/data/uploads
+      PARSED_DIR: /app/data/parsed
+    volumes:
+      - rag_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  nginx:
+    build: ./frontend
+    container_name: rag-nginx
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  rag_data:

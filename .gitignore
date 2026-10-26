@@ -1,0 +1,24 @@
+# 依赖与构建产物
+node_modules/
+frontend/dist/
+backend/.venv/
+backend/.python-runtime/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 运行时数据（上传文件/解析产物）
+backend/data/
+.npm-cache/
+
+# 环境与密钥
+.env
+backend/.env
+
+# 本地开发产物
+.proto-shots/
+*.log
+
+# 系统
+.DS_Store
+._*
