@@ -162,7 +162,7 @@
                 :options="[
                   { label: '简易（提示词 + 知识库 + 表单）', value: 'simple' },
                   { label: 'Chat Flow（可视化编排）', value: 'chatflow' },
-                  { label: 'Agent（自主规划工具，Phase 3 开放）', value: 'agent', disabled: true }
+                  { label: 'Agent（自主规划工具）', value: 'agent' }
                 ]"
               />
             </n-form-item>
@@ -246,6 +246,28 @@
                 :autosize="{ minRows: 2, maxRows: 4 }"
                 placeholder="附加在兜底话术后的提示"
               />
+            </n-form-item>
+          </n-form>
+        </n-card>
+
+        <n-card size="small" title="发布设置" style="max-width: 760px; margin-bottom: 16px">
+          <n-form label-placement="left" label-width="100">
+            <n-form-item label="对外发布">
+              <n-switch v-model:value="form.publish_enabled" />
+              <span class="field-hint">应用需为「已发布」状态且开启此开关后，公开链接才可访问</span>
+            </n-form-item>
+            <n-form-item v-if="form.publish_enabled" label="公开链接">
+              <div style="width: 100%">
+                <n-input-group>
+                  <n-input :value="publicUrl" readonly />
+                  <n-button type="primary" @click="copyPublicUrl">复制</n-button>
+                </n-input-group>
+                <div class="field-hint">iframe 嵌入代码：</div>
+                <n-input :value="embedCode" readonly type="textarea" :autosize="{ minRows: 2, maxRows: 3 }" />
+              </div>
+            </n-form-item>
+            <n-form-item label="企业微信">
+              <span class="field-hint">接入配置规划中（需企业微信自建应用，后续版本开放）</span>
             </n-form-item>
           </n-form>
         </n-card>
@@ -354,9 +376,20 @@ const form = reactive({
   opening: '',
   suggested_questions: [] as string[],
   fallback_reply: '',
-  transfer_hint: ''
+  transfer_hint: '',
+  publish_enabled: false
 })
 const saving = ref(false)
+
+const publicUrl = computed(() => `${location.origin}/pub/${route.params.id}`)
+const embedCode = computed(() => `<iframe src="${publicUrl.value}" style="width:100%;height:600px;border:0;border-radius:12px"></iframe>`)
+
+function copyPublicUrl() {
+  navigator.clipboard?.writeText(publicUrl.value).then(
+    () => message.success('公开链接已复制'),
+    () => message.info(`公开链接：${publicUrl.value}`)
+  )
+}
 
 const kbOptions = computed(() => kbs.value.map(k => ({ label: k.name, value: k.id })))
 const llmOptions = computed(() =>
@@ -406,6 +439,7 @@ function fillForm(a: Application) {
   form.suggested_questions = [...a.suggested_questions]
   form.fallback_reply = a.fallback_reply
   form.transfer_hint = a.transfer_hint
+  form.publish_enabled = !!a.publish_enabled
 }
 
 async function loadConversations() {
@@ -513,7 +547,8 @@ async function saveConfig() {
       opening: form.opening,
       suggested_questions: form.suggested_questions,
       fallback_reply: form.fallback_reply,
-      transfer_hint: form.transfer_hint
+      transfer_hint: form.transfer_hint,
+      publish_enabled: form.publish_enabled
     })
     app.value = updated
     fillForm(updated)

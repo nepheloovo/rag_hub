@@ -81,9 +81,26 @@ def _execute_llm(db, node, variables):
     return text or ""
 
 
-def _execute_tool(node, variables):
-    """HTTP 工具节点：URL/方法/Headers/Body 支持变量模板，返回响应文本"""
+def _execute_tool(db, node, variables, app=None):
+    """工具节点：优先引用注册工具（带调用统计），否则内联 HTTP 配置"""
     data = node.get("data", {})
+    tool_ref = data.get("tool_ref")
+    if tool_ref:
+        from app.models import Tool
+        from app.services.tools import execute_tool
+
+        tool = db.get(Tool, tool_ref)
+        if not tool:
+            raise FlowError("引用的工具不存在或已删除")
+        result = execute_tool(
+            db, tool, variables,
+            app_id=app.id if app else "",
+            app_name=app.name if app else "",
+        )
+        key = data.get("output_var") or f"{node['id']}_output"
+        variables[key] = result
+        variables["output"] = result
+        return result
     url = render_template(data.get("url", ""), variables)
     if not url:
         raise FlowError("HTTP 工具节点未配置 URL")
@@ -155,7 +172,7 @@ def _final_text(db, app: Application, variables: dict, refs: list) -> str:
         elif ntype == "llm":
             _execute_llm(db, node, variables)
         elif ntype == "tool":
-            _execute_tool(node, variables)
+            _execute_tool(db, node, variables, app)
         elif ntype == "condition":
             result = _evaluate_condition(node, variables)
             outgoing = adjacency.get(current, [])

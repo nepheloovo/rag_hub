@@ -144,6 +144,7 @@ export interface Application {
   transfer_hint: string
   flow: { nodes: any[]; edges: any[] } | null
   flow_history: Record<string, any>
+  publish_enabled: boolean
   call_count_7d: number
   created_at: string
   updated_at: string
@@ -166,6 +167,20 @@ export interface StatsOverview {
   kb_count: number
   app_count: number
   published_count: number
+}
+
+// ---------- 工具 ----------
+export interface ToolItem {
+  id: string
+  name: string
+  description: string
+  tool_type: string
+  status: string
+  enabled: boolean
+  call_count: number
+  last_called_at: string | null
+  used_by_apps: string[]
+  created_at: string
 }
 
 export interface AppDoneData {

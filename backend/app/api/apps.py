@@ -233,8 +233,8 @@ def _stream_text_chunks(text: str, size: int = 12):
         yield text[i : i + size]
 
 
-@router.post("/{app_id}/chat")
-async def chat_app(app_id: str, req: AppChatRequest):
+def app_chat_response(app_id: str, req: AppChatRequest) -> StreamingResponse:
+    """应用级对话核心（简易 / Chat Flow / Agent 形态统一入口），供内部与公开路由复用"""
     if not req.query.strip():
         raise HTTPException(status_code=422, detail="问题不能为空")
 
@@ -279,6 +279,7 @@ async def chat_app(app_id: str, req: AppChatRequest):
 
         # Chat Flow 应用：校验编排后交给流程执行器（检索逻辑在流程节点内）
         is_chatflow = app.app_kind == "chatflow"
+        is_agent = app.app_kind == "agent"
         if is_chatflow:
             from app.services.flow import validate_flow
 
@@ -287,6 +288,15 @@ async def chat_app(app_id: str, req: AppChatRequest):
                 db.close()
                 raise HTTPException(status_code=422, detail="；".join(problems))
             outcome = None
+            no_context_reply = ""
+        elif is_agent:
+            # Agent：先做知识库检索供模型参考，工具由模型函数调用规划
+            from app.services.retrieval import common_embedding_ref
+
+            outcome = retrieve(
+                db, list(app.kb_ids), req.query,
+                embedding_ref=common_embedding_ref(db, list(app.kb_ids)),
+            ) if app.kb_ids else None
             no_context_reply = ""
         else:
             # 多库联合检索（embedding 模型与索引保持一致）
@@ -325,6 +335,7 @@ async def chat_app(app_id: str, req: AppChatRequest):
             "app_type": app.app_type,
             "app_kind": app.app_kind,
             "is_chatflow": is_chatflow,
+            "is_agent": is_agent,
             "system_prompt": app.system_prompt,
             "temperature": app.temperature,
             "show_refs": app.show_refs,
@@ -351,7 +362,34 @@ async def chat_app(app_id: str, req: AppChatRequest):
         gen_db = SessionLocal()
         try:
             refs = []
-            if app_meta["is_chatflow"]:
+            if app_meta["is_agent"]:
+                # Agent：LLM 函数调用规划工具，流式输出
+                from app.services.agent import run_agent
+
+                app_obj = gen_db.get(Application, app_meta["app_id"])
+                contexts = ""
+                if outcome:
+                    if app_meta["show_refs"]:
+                        for item in outcome.chunks[:5]:
+                            meta = item.chunk.metadata_ or {}
+                            refs.append(
+                                {
+                                    "doc_id": item.chunk.doc_id,
+                                    "title": meta.get("source", ""),
+                                    "page": meta.get("page", 0),
+                                    "snippet": item.chunk.content[:200],
+                                    "score": round(item.score, 4),
+                                }
+                            )
+                    contexts = "\n\n".join(
+                        f"[{i}] {c.chunk.content}" for i, c in enumerate(outcome.chunks, start=1)
+                    )
+                for piece in run_agent(gen_db, app_obj, req.query, contexts):
+                    answer_parts.append(piece)
+                    yield _sse("delta", {"text": piece})
+                model_name = "agent"
+                is_fake = False
+            elif app_meta["is_chatflow"]:
                 # 执行 Chat Flow（LLM/HTTP 工具同步生成，最终文本流式输出）
                 from app.services.flow import FlowError, run_chatflow
 
@@ -494,3 +532,9 @@ async def chat_app(app_id: str, req: AppChatRequest):
             gen_db.close()
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.post("/{app_id}/chat")
+def chat_app(app_id: str, req: AppChatRequest):
+    """内部应用对话路由"""
+    return app_chat_response(app_id, req)

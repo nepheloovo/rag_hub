@@ -307,7 +307,7 @@ const createForm = ref({ name: '', app_kind: 'simple', category: '办公提效',
 const kindOptions = [
   { label: '简易（提示词 + 知识库 + 表单）', value: 'simple' },
   { label: 'Chat Flow（可视化编排）', value: 'chatflow' },
-  { label: 'Agent（自主规划工具，规划中）', value: 'agent', disabled: true }
+  { label: 'Agent（自主规划工具）', value: 'agent' }
 ]
 const categoryOptions = ['报告撰写', '智能客服', '制度与合同审校', '营销内容', '办公提效'].map(c => ({ label: c, value: c }))
 const kbOptions = computed(() => kbs.value.map(k => ({ label: k.name, value: k.id })))

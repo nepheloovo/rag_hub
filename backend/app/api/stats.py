@@ -1,7 +1,7 @@
 """业务统计 API：工作台/看板数据"""
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -9,6 +9,38 @@ from app.database import get_db
 from app.models import Application, ChatLog, Document, KnowledgeBase
 
 router = APIRouter(prefix="/stats", tags=["统计"])
+
+
+@router.get("/trend")
+def trend(days: int = Query(14, ge=1, le=60), db: Session = Depends(get_db)):
+    """近 N 日趋势：应用调用（成功）/ 新增文档 / 新增应用"""
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    dates = [(today - timedelta(days=i)).date() for i in range(days - 1, -1, -1)]
+    calls, docs, apps = [], [], []
+    for day in dates:
+        start = datetime.combine(day, datetime.min.time())
+        end = start + timedelta(days=1)
+        calls.append(
+            db.query(func.count(ChatLog.id))
+            .filter(ChatLog.time >= start, ChatLog.time < end, ChatLog.status == "success")
+            .scalar() or 0
+        )
+        docs.append(
+            db.query(func.count(Document.id))
+            .filter(Document.created_at >= start, Document.created_at < end)
+            .scalar() or 0
+        )
+        apps.append(
+            db.query(func.count(Application.id))
+            .filter(Application.created_at >= start, Application.created_at < end)
+            .scalar() or 0
+        )
+    return {
+        "dates": [str(d) for d in dates],
+        "calls": [int(v) for v in calls],
+        "docs": [int(v) for v in docs],
+        "apps": [int(v) for v in apps],
+    }
 
 
 @router.get("/overview")

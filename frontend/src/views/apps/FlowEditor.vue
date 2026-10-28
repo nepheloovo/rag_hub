@@ -122,18 +122,29 @@
         </n-form>
 
         <n-form v-if="selectedNode.type === 'tool'" label-placement="top">
-          <n-form-item label="URL（支持 {{变量}}）">
-            <n-input v-model:value="cfg.url" placeholder="https://api.example.com/order?q={{input}}" />
+          <n-form-item label="引用注册工具">
+            <n-select
+              v-model:value="cfg.tool_ref"
+              :options="toolOptions"
+              placeholder="不选则使用下方内联 HTTP 配置"
+              clearable
+            />
+            <div class="field-hint">在「工具」页注册的工具可被复用并统计调用量</div>
           </n-form-item>
-          <n-form-item label="方法">
-            <n-select v-model:value="cfg.method" :options="['GET', 'POST', 'PUT'].map(m => ({ label: m, value: m }))" />
-          </n-form-item>
-          <n-form-item label="Headers（JSON 对象）">
-            <n-input v-model:value="cfg.headers_json" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder='{"Authorization": "Bearer xxx"}' />
-          </n-form-item>
-          <n-form-item label="Body（支持 {{变量}}）">
-            <n-input v-model:value="cfg.body" type="textarea" :autosize="{ minRows: 3, maxRows: 5 }" placeholder='{"order_id": "{{input}}"}' />
-          </n-form-item>
+          <template v-if="!cfg.tool_ref">
+            <n-form-item label="URL（支持 {{变量}}）">
+              <n-input v-model:value="cfg.url" placeholder="https://api.example.com/order?q={{input}}" />
+            </n-form-item>
+            <n-form-item label="方法">
+              <n-select v-model:value="cfg.method" :options="['GET', 'POST', 'PUT'].map(m => ({ label: m, value: m }))" />
+            </n-form-item>
+            <n-form-item label="Headers（JSON 对象）">
+              <n-input v-model:value="cfg.headers_json" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder='{"Authorization": "Bearer xxx"}' />
+            </n-form-item>
+            <n-form-item label="Body（支持 {{变量}}）">
+              <n-input v-model:value="cfg.body" type="textarea" :autosize="{ minRows: 3, maxRows: 5 }" placeholder='{"order_id": "{{input}}"}' />
+            </n-form-item>
+          </template>
           <n-form-item label="输出变量名">
             <n-input v-model:value="cfg.output_var" placeholder="默认：{{selectedNode.id}}_output" />
           </n-form-item>
@@ -177,7 +188,7 @@ import {
   GitBranchOutline,
   CheckmarkCircleOutline
 } from '@vicons/ionicons5'
-import { api, getApp, listKbs, listProviders, updateApp } from '@/api'
+import { api, getApp, listKbs, listProviders, listTools, updateApp } from '@/api'
 import type { Application, KnowledgeBase, Provider } from '@/api/types'
 
 const props = defineProps<{ appId: string }>()
@@ -209,7 +220,9 @@ const canvasWrapRef = ref<HTMLElement | null>(null)
 
 const kbs = ref<KnowledgeBase[]>([])
 const providers = ref<Provider[]>([])
+const tools = ref<any[]>([])
 const kbOptions = computed(() => kbs.value.map(k => ({ label: k.name, value: k.id })))
+const toolOptions = computed(() => tools.value.map(t => ({ label: `${t.name}（${t.tool_type === 'system' ? '系统内置' : 'HTTP'}）`, value: t.id })))
 const llmOptions = computed(() =>
   providers.value
     .filter(p => p.enabled)
@@ -251,7 +264,10 @@ function nodeSummary(n: FlowNode): string {
     case 'start': return '用户输入 → {{input}}'
     case 'retrieval': return `知识库 ${(d.kb_ids || []).length} 个 · top${d.top_k || 5}`
     case 'llm': return (d.system_prompt || '').slice(0, 24) || '系统提示词未配置'
-    case 'tool': return `${d.method || 'GET'} ${(d.url || '').slice(0, 28) || 'URL 未配置'}`
+    case 'tool': {
+      const refName = tools.value.find(t => t.id === d.tool_ref)?.name
+      return refName ? `调用工具：${refName}` : `${d.method || 'GET'} ${(d.url || '').slice(0, 28) || 'URL 未配置'}`
+    }
     case 'condition': return `${d.left || '{{output}}'} ${d.op || 'not_empty'} ${d.value || ''}`
     case 'answer': return (d.content || '').slice(0, 28) || '输出内容未配置'
     default: return ''
@@ -265,7 +281,7 @@ function newNode(type: string, x?: number, y?: number): FlowNode {
   if (type === 'retrieval') data.kb_ids = []
   if (type === 'retrieval') data.top_k = 5
   if (type === 'llm') { data.system_prompt = ''; data.user_prompt = '{{input}}'; data.temperature = 0.2 }
-  if (type === 'tool') { data.method = 'GET'; data.url = ''; data.headers_json = ''; data.body = '' }
+  if (type === 'tool') { data.tool_ref = null; data.method = 'GET'; data.url = ''; data.headers_json = ''; data.body = '' }
   if (type === 'condition') { data.left = '{{output}}'; data.op = 'contains'; data.value = '' }
   if (type === 'answer') data.content = '{{output}}'
   return { id: 'n' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), type, data, position: pos }
@@ -414,6 +430,7 @@ async function load() {
   try {
     const [app, kbList, pvList] = await Promise.all([getApp(props.appId), listKbs(), listProviders()])
     kbs.value = kbList
+    tools.value = await listTools().catch(() => [])
     providers.value = pvList
     appVersion.value = app.version
     if (app.flow?.nodes) {

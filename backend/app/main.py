@@ -4,10 +4,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import apps, chat, health, knowledge, logs, providers, stats
+from app.api import apps, chat, health, knowledge, logs, providers, public, stats, tools
 from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.services.provider_service import seed_presets
+from app.services.tools import seed_system_tools
 
 
 @asynccontextmanager
@@ -16,6 +17,7 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as db:
         seed_presets(db)
+        seed_system_tools(db)
     yield
 
 
@@ -37,3 +39,5 @@ app.include_router(chat.router, prefix=settings.api_prefix)
 app.include_router(apps.router, prefix=settings.api_prefix)
 app.include_router(logs.router, prefix=settings.api_prefix)
 app.include_router(stats.router, prefix=settings.api_prefix)
+app.include_router(tools.router, prefix=settings.api_prefix)
+app.include_router(public.router, prefix=settings.api_prefix)

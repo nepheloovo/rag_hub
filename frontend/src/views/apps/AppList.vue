@@ -123,7 +123,7 @@
             :options="[
               { label: '简易（提示词 + 知识库 + 表单）', value: 'simple' },
               { label: 'Chat Flow（可视化编排）', value: 'chatflow' },
-              { label: 'Agent（自主规划工具，规划中）', value: 'agent', disabled: true }
+              { label: 'Agent（自主规划工具）', value: 'agent' }
             ]"
           />
         </n-form-item>

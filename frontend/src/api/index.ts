@@ -16,7 +16,8 @@ import type {
   ModelDefaults,
   Provider,
   RetrievalChunk,
-  StatsOverview
+  StatsOverview,
+  ToolItem
 } from './types'
 
 // ---------- 知识库 ----------
@@ -121,3 +122,24 @@ export const generateApp = (description: string) =>
     body: JSON.stringify({ description })
   })
 export const getStatsOverview = () => api<StatsOverview>('/stats/overview')
+export const getStatsTrend = (days = 14) =>
+  api<{ dates: string[]; calls: number[]; docs: number[]; apps: number[] }>(`/stats/trend?days=${days}`)
+
+// ---------- 工具 ----------
+export const listTools = () =>
+  api<ToolItem[]>('/tools')
+export const createTool = (data: { name: string; description?: string; tool_type?: string; config?: Record<string, any> }) =>
+  api<ToolItem>('/tools', { method: 'POST', body: JSON.stringify(data) })
+export const updateTool = (id: string, data: Partial<ToolItem>) =>
+  api<ToolItem>(`/tools/${id}`, { method: 'PUT', body: JSON.stringify(data) })
+export const deleteTool = (id: string) => api(`/tools/${id}`, { method: 'DELETE' })
+export const testTool = (id: string, input: string) =>
+  api<{ result: string }>(`/tools/${id}/test`, { method: 'POST', body: JSON.stringify({ input }) })
+export const toolLogs = (id: string, limit = 20) =>
+  api<any[]>(`/tools/${id}/logs?limit=${limit}`)
+
+// ---------- 公开访问 ----------
+export const getPublicApp = (id: string) =>
+  api<{ id: string; name: string; description: string; app_type: string; app_kind: string; opening: string; suggested_questions: string[]; show_refs: boolean }>(`/public/apps/${id}`)
+export const streamPublicChat = (appId: string, body: { query: string }) =>
+  sseStream<AppDoneData | { text: string } | { message: string }>(`/public/apps/${appId}/chat`, { ...body, role: '访客' })

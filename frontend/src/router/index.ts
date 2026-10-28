@@ -7,6 +7,11 @@ const routes = [
     component: () => import('@/views/RoleSelect.vue')
   },
   {
+    path: '/pub/:appId',
+    name: 'public-chat',
+    component: () => import('@/views/PublicChat.vue')
+  },
+  {
     path: '/app',
     component: () => import('@/layouts/MainLayout.vue'),
     children: [
