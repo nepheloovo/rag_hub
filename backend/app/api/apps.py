@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, get_db
 from app.config import settings
+from app.api.deps import require_roles
 from app.models import Application, ChatLog, Conversation, KnowledgeBase, Message
 from app.schemas.application import (
     AppChatRequest,
@@ -125,7 +126,7 @@ def generate_app(req: AppGenerateRequest, db: Session = Depends(get_db)):
     return {"draft": draft, "models": {"llm": model_name, "fake": is_fake}}
 
 
-@router.post("", response_model=ApplicationOut, status_code=201)
+@router.post("", response_model=ApplicationOut, status_code=201, dependencies=[Depends(require_roles("platform_admin", "app_developer", "kb_admin"))])
 def create_app(data: ApplicationCreate, db: Session = Depends(get_db)):
     if not data.name.strip():
         raise HTTPException(status_code=422, detail="应用名称不能为空")
@@ -170,7 +171,7 @@ def get_app(app_id: str, db: Session = Depends(get_db)):
     return _get_app(db, app_id)
 
 
-@router.put("/{app_id}", response_model=ApplicationOut)
+@router.put("/{app_id}", response_model=ApplicationOut, dependencies=[Depends(require_roles("platform_admin", "app_developer", "kb_admin"))])
 def update_app(app_id: str, data: ApplicationUpdate, db: Session = Depends(get_db)):
     app = _get_app(db, app_id)
     payload = data.model_dump(exclude_none=True)
@@ -200,7 +201,7 @@ def list_versions(app_id: str, db: Session = Depends(get_db)):
     return {"current": app.version, "versions": versions}
 
 
-@router.post("/{app_id}/restore", response_model=ApplicationOut)
+@router.post("/{app_id}/restore", response_model=ApplicationOut, dependencies=[Depends(require_roles("platform_admin", "app_developer", "kb_admin"))])
 def restore_version(app_id: str, req: AppRestoreRequest, db: Session = Depends(get_db)):
     app = _get_app(db, app_id)
     history = app.flow_history or {}
@@ -216,7 +217,7 @@ def restore_version(app_id: str, req: AppRestoreRequest, db: Session = Depends(g
     return app
 
 
-@router.delete("/{app_id}", status_code=204)
+@router.delete("/{app_id}", status_code=204, dependencies=[Depends(require_roles("platform_admin", "app_developer", "kb_admin"))])
 def delete_app(app_id: str, db: Session = Depends(get_db)):
     app = _get_app(db, app_id)
     # 删除应用下的会话与消息

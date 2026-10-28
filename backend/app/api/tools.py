@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
+from app.api.deps import require_roles
 from app.models import Application, Tool, ToolCallLog
 from app.services.tools import execute_tool
 
@@ -48,7 +49,7 @@ def list_tools(db: Session = Depends(get_db)):
     return result
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, dependencies=[Depends(require_roles("platform_admin", "app_developer"))])
 def create_tool(data: dict, db: Session = Depends(get_db)):
     if not data.get("name"):
         raise HTTPException(status_code=422, detail="工具名称不能为空")
@@ -68,7 +69,7 @@ def create_tool(data: dict, db: Session = Depends(get_db)):
     return tool
 
 
-@router.put("/{tool_id}")
+@router.put("/{tool_id}", dependencies=[Depends(require_roles("platform_admin", "app_developer"))])
 def update_tool(tool_id: str, data: dict, db: Session = Depends(get_db)):
     tool = _get_tool(db, tool_id)
     for field in ("name", "description", "config", "status", "enabled"):
@@ -79,7 +80,7 @@ def update_tool(tool_id: str, data: dict, db: Session = Depends(get_db)):
     return tool
 
 
-@router.delete("/{tool_id}", status_code=204)
+@router.delete("/{tool_id}", status_code=204, dependencies=[Depends(require_roles("platform_admin", "app_developer"))])
 def delete_tool(tool_id: str, db: Session = Depends(get_db)):
     tool = _get_tool(db, tool_id)
     db.delete(tool)

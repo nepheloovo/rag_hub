@@ -45,6 +45,8 @@ class Application(Base):
     flow_history: Mapped[dict] = mapped_column(JSONB, default=dict)
     # 对外发布：开启后可通过公开页面/嵌入访问（仅 status=published 生效）
     publish_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 访客每日限额（0=不限）：限制公开页面每日匿名对话次数
+    visitor_daily_limit: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

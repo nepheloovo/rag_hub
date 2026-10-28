@@ -145,6 +145,7 @@ export interface Application {
   flow: { nodes: any[]; edges: any[] } | null
   flow_history: Record<string, any>
   publish_enabled: boolean
+  visitor_daily_limit: number
   call_count_7d: number
   created_at: string
   updated_at: string

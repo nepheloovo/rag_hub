@@ -2,14 +2,28 @@
 // VITE_API_BASE：部署到 Vercel 等平台时指向公网后端（如 https://api.example.com）；本地留空走 /api 代理
 const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/+$/, '')
 
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem('zhishu-token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
 export async function api<T = any>(path: string, options: RequestInit = {}): Promise<T> {
   const resp = await fetch(`${API_BASE}/api${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...authHeaders(),
       ...(options.headers || {})
     }
   })
+  if (resp.status === 401 && !path.startsWith('/auth/login')) {
+    // 登录失效：清除并回登录页
+    localStorage.removeItem('zhishu-token')
+    localStorage.removeItem('zhishu-user')
+    if (!location.pathname.startsWith('/login') && !location.pathname.startsWith('/pub/')) {
+      location.href = '/login'
+    }
+  }
   if (!resp.ok) {
     let detail = `请求失败（HTTP ${resp.status}）`
     try {
@@ -33,7 +47,7 @@ export interface SseEvent<T = any> {
 export async function* sseStream<T = any>(path: string, body: any): AsyncGenerator<SseEvent<T>> {
   const resp = await fetch(`${API_BASE}/api${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body)
   })
   if (!resp.ok) {
@@ -85,6 +99,8 @@ export function uploadFile<T = any>(
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('POST', `${API_BASE}/api${path}`)
+    const token = localStorage.getItem('zhishu-token')
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
     xhr.upload.onprogress = e => {
       if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100))
     }

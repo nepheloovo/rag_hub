@@ -21,9 +21,9 @@
       />
 
       <div class="side-bottom">
-        <n-tag :bordered="false" type="info" size="small" round>{{ store.roleLabel }}</n-tag>
-        <n-button text size="small" style="color: #8f959e" @click="switchRole">
-          切换角色
+        <n-tag :bordered="false" type="info" size="small" round>{{ roleLabel }}</n-tag>
+        <n-button text size="small" style="color: #8f959e" @click="logout">
+          退出登录
         </n-button>
       </div>
     </n-layout-sider>
@@ -33,14 +33,15 @@
         <div class="header-row">
           <span class="header-title">{{ route.meta.title || '' }}</span>
           <n-space align="center" :size="12">
-            <n-tag :bordered="false" type="info" size="small" round>{{ store.roleLabel }}</n-tag>
+            <span class="user-name">{{ auth.displayName }}<span class="user-dept" v-if="auth.user?.department"> · {{ auth.user.department }}</span></span>
+            <n-tag :bordered="false" type="info" size="small" round>{{ roleLabel }}</n-tag>
             <n-tooltip trigger="hover">
               <template #trigger>
-                <n-button quaternary circle size="small" @click="switchRole">
+                <n-button quaternary circle size="small" @click="logout">
                   <template #icon><n-icon><ExitOutline /></n-icon></template>
                 </n-button>
               </template>
-              退出并切换角色
+              退出登录
             </n-tooltip>
           </n-space>
         </div>
@@ -70,28 +71,29 @@ import {
   SettingsOutline,
   ExitOutline
 } from '@vicons/ionicons5'
-import { useAppStore } from '@/stores/app'
+import { useAuthStore, roleLabels } from '@/stores/auth'
 
 const route = useRoute()
 const router = useRouter()
-const store = useAppStore()
+const auth = useAuthStore()
+const roleLabel = computed(() => (auth.role ? roleLabels[auth.role] : ''))
 
 function renderIcon(icon: any) {
   return () => h(NIcon, null, { default: () => h(icon) })
 }
 
 const allMenus = [
-  { key: 'workbench', label: '工作台', icon: renderIcon(markRaw(HomeOutline)), path: '/app/workbench', roles: ['admin', 'manager', 'user'] },
-  { key: 'apps', label: '应用', icon: renderIcon(markRaw(GridOutline)), path: '/app/apps', roles: ['admin', 'manager', 'user'] },
-  { key: 'knowledge', label: '知识库', icon: renderIcon(markRaw(FolderOpenOutline)), path: '/app/knowledge', roles: ['admin', 'manager'] },
-  { key: 'tools', label: '工具', icon: renderIcon(markRaw(ConstructOutline)), path: '/app/tools', roles: ['admin', 'manager'] },
-  { key: 'dashboard', label: '看板', icon: renderIcon(markRaw(BarChartOutline)), path: '/app/dashboard', roles: ['admin', 'manager'] },
-  { key: 'settings', label: '设置', icon: renderIcon(markRaw(SettingsOutline)), path: '/app/settings', roles: ['admin'] }
+  { key: 'workbench', label: '工作台', icon: renderIcon(markRaw(HomeOutline)), path: '/app/workbench', roles: ['platform_admin', 'app_developer', 'kb_admin', 'business_user'] },
+  { key: 'apps', label: '应用', icon: renderIcon(markRaw(GridOutline)), path: '/app/apps', roles: ['platform_admin', 'app_developer', 'kb_admin', 'business_user'] },
+  { key: 'knowledge', label: '知识库', icon: renderIcon(markRaw(FolderOpenOutline)), path: '/app/knowledge', roles: ['platform_admin', 'app_developer', 'kb_admin'] },
+  { key: 'tools', label: '工具', icon: renderIcon(markRaw(ConstructOutline)), path: '/app/tools', roles: ['platform_admin', 'app_developer', 'kb_admin'] },
+  { key: 'dashboard', label: '看板', icon: renderIcon(markRaw(BarChartOutline)), path: '/app/dashboard', roles: ['platform_admin', 'app_developer', 'kb_admin'] },
+  { key: 'settings', label: '设置', icon: renderIcon(markRaw(SettingsOutline)), path: '/app/settings', roles: ['platform_admin'] }
 ]
 
 const menuOptions = computed(() =>
   allMenus
-    .filter(m => store.role && m.roles.includes(store.role))
+    .filter(m => auth.role && m.roles.includes(auth.role))
     .map(m => ({ key: m.key, label: m.label, icon: m.icon }))
 )
 
@@ -109,9 +111,9 @@ function onMenuSelect(key: string) {
   if (menu) router.push(menu.path)
 }
 
-function switchRole() {
-  store.clearRole()
-  router.push('/')
+function logout() {
+  auth.logout()
+  router.push('/login')
 }
 </script>
 

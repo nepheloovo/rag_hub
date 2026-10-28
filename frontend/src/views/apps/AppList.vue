@@ -168,11 +168,11 @@ import {
 } from '@vicons/ionicons5'
 import { createApp as apiCreateApp, deleteApp, listApps, listKbs } from '@/api'
 import type { Application, KnowledgeBase } from '@/api/types'
-import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 
 const message = useMessage()
 const dialog = useDialog()
-const store = useAppStore()
+const auth = useAuthStore()
 
 const apps = ref<Application[]>([])
 const kbs = ref<KnowledgeBase[]>([])
@@ -180,7 +180,7 @@ const loading = ref(false)
 const showCreate = ref(false)
 const creating = ref(false)
 
-const canManage = computed(() => store.role === 'admin' || store.role === 'manager')
+const canManage = computed(() => ['platform_admin', 'app_developer', 'kb_admin'].includes(auth.role!))
 
 const kindMeta: Record<string, { label: string; color: string; bg: string; icon: any }> = {
   simple: { label: '简易', color: '#3370ff', bg: '#eef3ff', icon: markRaw(ChatbubblesOutline) },

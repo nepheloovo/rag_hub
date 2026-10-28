@@ -2,7 +2,7 @@
   <div class="page">
     <div class="greet">
       <div>
-        <h2 class="page-title">{{ greeting }}，{{ store.roleLabel }}</h2>
+        <h2 class="page-title">{{ greeting }}，{{ auth.displayName }}</h2>
         <p class="page-desc">选择一个业务应用开始工作，或直接描述你要完成的事。</p>
       </div>
     </div>
@@ -192,10 +192,10 @@ import {
 } from '@vicons/ionicons5'
 import { generateApp, getStatsOverview, listApps, listKbs, createApp } from '@/api'
 import type { AppGenerateDraft, Application, KnowledgeBase, StatsOverview } from '@/api/types'
-import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 
 const message = useMessage()
-const store = useAppStore()
+const auth = useAuthStore()
 const apps = ref<Application[]>([])
 const kbs = ref<KnowledgeBase[]>([])
 const stats = ref<StatsOverview>({

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
+from app.api.deps import require_roles
 from app.models import Chunk, Document, KnowledgeBase
 from app.schemas.knowledge import (
     ChunkOut,
@@ -70,7 +71,7 @@ def list_kbs(db: Session = Depends(get_db)):
     return result
 
 
-@kb_router.post("", response_model=KnowledgeBaseOut, status_code=201)
+@kb_router.post("", response_model=KnowledgeBaseOut, status_code=201, dependencies=[Depends(require_roles("platform_admin", "kb_admin", "app_developer"))])
 def create_kb(data: KnowledgeBaseCreate, db: Session = Depends(get_db)):
     if not data.name.strip():
         raise HTTPException(status_code=422, detail="知识库名称不能为空")
@@ -95,7 +96,7 @@ def get_kb(kb_id: str, db: Session = Depends(get_db)):
     return _get_kb(db, kb_id)
 
 
-@kb_router.put("/{kb_id}", response_model=KnowledgeBaseOut)
+@kb_router.put("/{kb_id}", response_model=KnowledgeBaseOut, dependencies=[Depends(require_roles("platform_admin", "kb_admin", "app_developer"))])
 def update_kb(kb_id: str, data: KnowledgeBaseUpdate, db: Session = Depends(get_db)):
     kb = _get_kb(db, kb_id)
     for field, value in data.model_dump(exclude_none=True).items():
@@ -105,7 +106,7 @@ def update_kb(kb_id: str, data: KnowledgeBaseUpdate, db: Session = Depends(get_d
     return kb
 
 
-@kb_router.delete("/{kb_id}", status_code=204)
+@kb_router.delete("/{kb_id}", status_code=204, dependencies=[Depends(require_roles("platform_admin", "kb_admin", "app_developer"))])
 def delete_kb(kb_id: str, db: Session = Depends(get_db)):
     kb = _get_kb(db, kb_id)
     db.query(Chunk).filter(Chunk.kb_id == kb_id).delete()
@@ -144,7 +145,7 @@ def test_retrieval(kb_id: str, q: str = Query(..., min_length=1), db: Session = 
     }
 
 
-@kb_router.post("/{kb_id}/documents", response_model=DocumentOut, status_code=201)
+@kb_router.post("/{kb_id}/documents", response_model=DocumentOut, status_code=201, dependencies=[Depends(require_roles("platform_admin", "kb_admin", "app_developer"))])
 async def upload_document(
     kb_id: str,
     file: UploadFile,
@@ -201,7 +202,7 @@ def list_documents(kb_id: str, db: Session = Depends(get_db)):
     )
 
 
-@doc_router.delete("/{doc_id}", status_code=204)
+@doc_router.delete("/{doc_id}", status_code=204, dependencies=[Depends(require_roles("platform_admin", "kb_admin", "app_developer"))])
 def delete_document(doc_id: str, db: Session = Depends(get_db)):
     doc = db.get(Document, doc_id)
     if not doc:
@@ -216,7 +217,7 @@ def delete_document(doc_id: str, db: Session = Depends(get_db)):
     db.commit()
 
 
-@doc_router.post("/{doc_id}/reparse", response_model=DocumentOut)
+@doc_router.post("/{doc_id}/reparse", response_model=DocumentOut, dependencies=[Depends(require_roles("platform_admin", "kb_admin", "app_developer"))])
 def reparse_document(doc_id: str, db: Session = Depends(get_db)):
     doc = db.get(Document, doc_id)
     if not doc:
@@ -231,7 +232,7 @@ def reparse_document(doc_id: str, db: Session = Depends(get_db)):
     return doc
 
 
-@doc_router.post("/{doc_id}/index", response_model=DocumentOut)
+@doc_router.post("/{doc_id}/index", response_model=DocumentOut, dependencies=[Depends(require_roles("platform_admin", "kb_admin", "app_developer"))])
 def index_document(doc_id: str, db: Session = Depends(get_db)):
     """预览确认后索引入库（等同 reparse，语义区分）"""
     return reparse_document(doc_id, db)

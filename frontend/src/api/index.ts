@@ -143,3 +143,17 @@ export const getPublicApp = (id: string) =>
   api<{ id: string; name: string; description: string; app_type: string; app_kind: string; opening: string; suggested_questions: string[]; show_refs: boolean }>(`/public/apps/${id}`)
 export const streamPublicChat = (appId: string, body: { query: string }) =>
   sseStream<AppDoneData | { text: string } | { message: string }>(`/public/apps/${appId}/chat`, { ...body, role: '访客' })
+
+// ---------- 成员与审计 ----------
+export const listUsers = () => api<any[]>('/users')
+export const createUser = (data: { username: string; display_name?: string; department?: string; role: string; password: string }) =>
+  api('/users', { method: 'POST', body: JSON.stringify(data) })
+export const updateUser = (id: string, data: Record<string, any>) =>
+  api(`/users/${id}`, { method: 'PUT', body: JSON.stringify(data) })
+export const listAudit = (params: { action?: string; actor?: string; page?: number; page_size?: number }) => {
+  const qs = new URLSearchParams()
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== '') qs.set(k, String(v))
+  })
+  return api<{ total: number; items: any[] }>(`/audit?${qs.toString()}`)
+}

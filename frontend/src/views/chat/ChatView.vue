@@ -145,7 +145,7 @@ import {
 } from '@vicons/ionicons5'
 import { listConversations, listKbs, getMessages, streamChat, listProviders, getDefaults } from '@/api'
 import type { ChatMessage, Conversation, KnowledgeBase, Provider, RefItem } from '@/api/types'
-import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 
 interface Msg {
   id: string
@@ -157,7 +157,7 @@ interface Msg {
 }
 
 const message = useMessage()
-const store = useAppStore()
+const auth = useAuthStore()
 const scrollRef = ref<any>(null)
 const kbs = ref<KnowledgeBase[]>([])
 const selectedKb = ref<string | null>(null)
@@ -284,7 +284,7 @@ async function send(text?: string) {
     for await (const { event, data } of streamChat({
       kb_id: selectedKb.value,
       query: content,
-      role: store.role ?? 'user',
+      role: auth.role ?? 'business_user',
       conversation_id: activeConvId.value
     })) {
       if (event === 'delta') {

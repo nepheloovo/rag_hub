@@ -303,7 +303,7 @@ import {
   updateApp
 } from '@/api'
 import type { AppKind, AppStatus, Application, ChatMessage, Conversation, KnowledgeBase, Provider, RefItem } from '@/api/types'
-import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import FlowEditor from './FlowEditor.vue'
 
 interface Msg {
@@ -318,13 +318,13 @@ interface Msg {
 const route = useRoute()
 const message = useMessage()
 const dialog = useDialog()
-const store = useAppStore()
+const auth = useAuthStore()
 
 const app = ref<Application | null>(null)
 const kbs = ref<KnowledgeBase[]>([])
 const providers = ref<Provider[]>([])
 const activeTab = ref('chat')
-const canManage = computed(() => store.role === 'admin' || store.role === 'manager')
+const canManage = computed(() => ['platform_admin', 'app_developer', 'kb_admin'].includes(auth.role!))
 
 // 类型元信息
 const typeMap: Record<string, { label: string; color: string; bg: string; icon: any }> = {
@@ -496,7 +496,7 @@ async function send(text?: string) {
   try {
     for await (const { event, data } of streamAppChat(route.params.id as string, {
       query: content,
-      role: store.role ?? 'user',
+      role: auth.role ?? 'business_user',
       conversation_id: activeConvId.value
     })) {
       if (event === 'delta') {
