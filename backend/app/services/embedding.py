@@ -6,7 +6,7 @@ import struct
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.services.llm_client import get_openai_client, resolve_default_model
+from app.services.llm_client import get_openai_client, resolve_default_model, resolve_model_ref
 
 
 def _fake_embed(texts: list[str]) -> list[list[float]]:
@@ -48,16 +48,22 @@ class EmbeddingService:
         return vectors
 
     @classmethod
-    def resolve(cls, db: Session) -> "EmbeddingService | None":
-        found = resolve_default_model(db, "embedding")
+    def resolve(cls, db: Session, ref: str | None = None) -> "EmbeddingService | None":
+        if ref:
+            found = resolve_model_ref(db, ref, "embedding")
+        else:
+            found = resolve_default_model(db, "embedding")
         if found:
             return cls(*found)
         return None
 
 
-def get_embedding_service(db: Session) -> EmbeddingService:
-    """获取 embedding 服务；无真实配置时返回伪向量服务（is_fake=True）"""
-    service = EmbeddingService.resolve(db)
+def get_embedding_service(db: Session, ref: str | None = None) -> EmbeddingService:
+    """获取 embedding 服务；ref 为 "provider:model" 显式引用（如知识库绑定模型），
+    解析失败时回退全局默认；仍无真实配置时返回伪向量服务（is_fake=True）"""
+    service = EmbeddingService.resolve(db, ref)
+    if not service and ref:
+        service = EmbeddingService.resolve(db, None)  # 回退全局默认
     if service:
         return service
     if not settings.allow_fake_embedding:

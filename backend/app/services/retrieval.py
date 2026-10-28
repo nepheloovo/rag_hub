@@ -34,9 +34,20 @@ class RetrievalOutcome:
         self.rerank_tokens = rerank_tokens
 
 
-def retrieve(db: Session, kb_ids: list[str], query: str) -> RetrievalOutcome:
-    """kb_ids 支持多知识库联合召回"""
-    embed_service = get_embedding_service(db)
+def common_embedding_ref(db: Session, kb_ids: list[str]) -> str | None:
+    """多知识库共用的 embedding 引用：全部一致时返回该 ref，否则返回 None（全局默认）"""
+    from app.models import KnowledgeBase
+
+    if not kb_ids:
+        return None
+    refs = {kb.embedding_ref or "" for kb in db.query(KnowledgeBase).filter(KnowledgeBase.id.in_(kb_ids)).all()}
+    ref = refs.pop() if len(refs) == 1 else ""
+    return ref or None
+
+
+def retrieve(db: Session, kb_ids: list[str], query: str, embedding_ref: str | None = None) -> RetrievalOutcome:
+    """kb_ids 支持多知识库联合召回；embedding_ref 显式指定查询向量模型（与索引一致）"""
+    embed_service = get_embedding_service(db, embedding_ref)
     query_vec, embed_tokens = embed_service.embed_texts_with_usage([query])
     query_vec = query_vec[0]
 
@@ -87,15 +98,39 @@ def retrieve(db: Session, kb_ids: list[str], query: str) -> RetrievalOutcome:
             ranked_rows = [(r, r[4]) for r in rows]
 
     chunks = []
+    parent_groups = set()
     for row, score in ranked_rows:
         chunk_id, doc_id, content, metadata, _sim = row
         meta = metadata or {}
+        group = meta.get("parent_group")
+        if meta.get("kind") == "child" and group:
+            parent_groups.add((doc_id, group))
         chunks.append(
             RetrievedChunk(
                 chunk=Chunk(id=chunk_id, doc_id=doc_id, content=content, metadata_=meta),
                 score=float(score),
             )
         )
+
+    # 父子分块展开：child 命中时返回所在 parent 的完整内容
+    if parent_groups:
+        from sqlalchemy import text as _text
+
+        parents: dict[tuple, str] = {}
+        for doc_id, group in parent_groups:
+            row = db.execute(
+                _text(
+                    "SELECT content FROM chunks "
+                    "WHERE doc_id = :doc_id AND metadata->>'parent_group' = :g AND metadata->>'kind' = 'parent' LIMIT 1"
+                ),
+                {"doc_id": doc_id, "g": group},
+            ).first()
+            if row:
+                parents[(doc_id, group)] = row[0]
+        for item in chunks:
+            group = (item.chunk.metadata_ or {}).get("parent_group")
+            if (item.chunk.metadata_ or {}).get("kind") == "child" and (item.chunk.doc_id, group) in parents:
+                item.chunk.content = parents[(item.chunk.doc_id, group)]
 
     return RetrievalOutcome(
         chunks=chunks,

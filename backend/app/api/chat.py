@@ -118,7 +118,7 @@ async def chat(req: ChatRequest):
         db.commit()
 
         # 检索（独立会话，避免长连接持有请求级 session）
-        outcome = retrieve(db, [req.kb_id], req.query)
+        outcome = retrieve(db, [req.kb_id], req.query, embedding_ref=kb.embedding_ref or None)
         if not outcome.chunks:
             raise HTTPException(status_code=422, detail="知识库中未检索到相关内容，请先导入文档")
 

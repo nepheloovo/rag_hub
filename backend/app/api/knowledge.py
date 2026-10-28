@@ -2,7 +2,7 @@
 import os
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -117,10 +117,10 @@ def delete_kb(kb_id: str, db: Session = Depends(get_db)):
 @kb_router.get("/{kb_id}/test-retrieval")
 def test_retrieval(kb_id: str, q: str = Query(..., min_length=1), db: Session = Depends(get_db)):
     """测试检索：验证召回/Rerank 效果（不入库、不写日志）"""
-    _get_kb(db, kb_id)
+    kb = _get_kb(db, kb_id)
     from app.services.retrieval import retrieve
 
-    outcome = retrieve(db, [kb_id], q)
+    outcome = retrieve(db, [kb_id], q, embedding_ref=kb.embedding_ref or None)
     return {
         "query": q,
         "chunks": [
@@ -145,7 +145,12 @@ def test_retrieval(kb_id: str, q: str = Query(..., min_length=1), db: Session = 
 
 
 @kb_router.post("/{kb_id}/documents", response_model=DocumentOut, status_code=201)
-async def upload_document(kb_id: str, file: UploadFile, db: Session = Depends(get_db)):
+async def upload_document(
+    kb_id: str,
+    file: UploadFile,
+    auto_index: bool = Form(True, description="上传后立即索引；false=仅存储，预览分块后手动索引入库"),
+    db: Session = Depends(get_db),
+):
     kb = _get_kb(db, kb_id)
     filename = file.filename or ""
     ext = os.path.splitext(filename)[1].lower()
@@ -177,10 +182,11 @@ async def upload_document(kb_id: str, file: UploadFile, db: Session = Depends(ge
     db.commit()
     db.refresh(doc)
 
-    # 异步解析入库
-    from app.worker.tasks import parse_document
+    # 异步解析入库（auto_index=false 时等待手动确认）
+    if auto_index:
+        from app.worker.tasks import parse_document
 
-    parse_document.delay(doc.id)
+        parse_document.delay(doc.id)
     return doc
 
 
@@ -223,6 +229,48 @@ def reparse_document(doc_id: str, db: Session = Depends(get_db)):
     parse_document.delay(doc_id)
     db.refresh(doc)
     return doc
+
+
+@doc_router.post("/{doc_id}/index", response_model=DocumentOut)
+def index_document(doc_id: str, db: Session = Depends(get_db)):
+    """预览确认后索引入库（等同 reparse，语义区分）"""
+    return reparse_document(doc_id, db)
+
+
+@doc_router.post("/{doc_id}/preview")
+def preview_chunks(
+    doc_id: str,
+    strategy: str | None = Query(None, description="分块策略，缺省用知识库配置"),
+    db: Session = Depends(get_db),
+):
+    """试切块预览：解析文档并按策略切分，返回前 50 块（不入库、不向量化）"""
+    doc = db.get(Document, doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    kb = db.get(KnowledgeBase, doc.kb_id)
+    chosen = strategy or (kb.chunk_strategy if kb and kb.chunk_strategy else "smart")
+
+    from app.services.chunking import STRATEGY_LABELS, split_markdown
+    from app.services.files import resolve_stored_path
+    from app.services.parsing.base import parse_file
+
+    parsed = parse_file(resolve_stored_path(doc.file_path), doc.file_type, db)
+    chunks = split_markdown(parsed.markdown, strategy=chosen, db=db)
+    return {
+        "strategy": chosen,
+        "strategy_label": STRATEGY_LABELS.get(chosen, chosen),
+        "total": len(chunks),
+        "chunks": [
+            {
+                "content": c["content"],
+                "heading": c.get("heading", ""),
+                "page": c.get("page", 0),
+                "kind": c.get("kind", "chunk"),
+            }
+            for c in chunks[:50]
+        ],
+        "warnings": parsed.warnings,
+    }
 
 
 @doc_router.get("/{doc_id}/chunks", response_model=list[ChunkOut])

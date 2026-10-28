@@ -241,8 +241,13 @@ async def chat_app(app_id: str, req: AppChatRequest):
         db.add(Message(id=uuid.uuid4().hex, conv_id=conv_id, role="user", content=req.query))
         db.commit()
 
-        # 多库联合检索
-        outcome = retrieve(db, list(app.kb_ids), req.query)
+        # 多库联合检索（embedding 模型与索引保持一致）
+        from app.services.retrieval import common_embedding_ref
+
+        outcome = retrieve(
+            db, list(app.kb_ids), req.query,
+            embedding_ref=common_embedding_ref(db, list(app.kb_ids)),
+        )
         # 相关性阈值过滤（默认 0 关闭；伪向量模式分值无意义，不要开启）
         if settings.retrieval_min_score > 0:
             outcome.chunks = [

@@ -17,9 +17,13 @@
     </div>
 
     <n-card size="small" style="margin-bottom: 16px">
-      <n-space :size="48">
-        <n-statistic label="文档总数" :value="docs.length" />
-        <n-statistic label="分块总数" :value="totalChunks" />
+      <n-space :size="36" align="center">
+        <n-tag :bordered="false" size="small" :color="{ color: kbTypeBg, textColor: kbTypeColor }">{{ kbTypeLabel }}</n-tag>
+        <span class="meta-item">分块策略：<b>{{ strategyShort }}</b></span>
+        <span class="meta-item">embedding：<b>{{ kbEmbedLabel }}</b></span>
+        <n-tag :bordered="false" size="small" :type="kbStatusType">{{ kbStatusLabel }}</n-tag>
+        <n-statistic label="文档" :value="docs.length" />
+        <n-statistic label="分块" :value="totalChunks" />
         <n-statistic label="解析中" :value="docs.filter(d => ['pending', 'parsing'].includes(d.status)).length" />
         <n-statistic label="失败" :value="docs.filter(d => d.status === 'failed').length" />
       </n-space>
@@ -140,19 +144,64 @@
             style="margin-top: 6px"
           />
           <div v-if="f.error" class="file-sub" style="color: #e5484d">{{ f.error }}</div>
+          <div v-if="f.docId && f.status === 'done'" class="file-actions">
+            <n-button size="tiny" quaternary type="primary" :loading="f.previewing" @click="openPreview(f)">
+              预览分块
+            </n-button>
+            <n-button size="tiny" type="primary" @click="confirmIndex(f)">确认入库</n-button>
+          </div>
         </div>
       </div>
 
       <template #footer>
         <div style="display: flex; justify-content: flex-end; gap: 10px">
           <n-button @click="closeImport">关闭</n-button>
-          <n-button
-            type="primary"
-            :disabled="!uploadingFiles.some(f => f.status === 'done')"
-            @click="confirmImport"
-          >
-            开始解析入库
-          </n-button>
+        </div>
+      </template>
+    </n-modal>
+
+    <!-- 分块预览弹窗 -->
+    <n-modal
+      v-model:show="showPreview"
+      preset="card"
+      :title="`分块预览：${previewFile?.name || ''}`"
+      style="width: 760px"
+      :mask-closable="false"
+    >
+      <div class="preview-toolbar">
+        <span class="preview-label">分块策略</span>
+        <n-select
+          v-model:value="previewStrategy"
+          :options="strategyOptions"
+          style="width: 300px"
+          @update:value="loadPreview"
+        />
+        <n-tag v-if="previewData" size="small" :bordered="false" type="info">
+          {{ previewData.total }} 块
+        </n-tag>
+      </div>
+      <n-spin :show="previewLoading">
+        <div v-if="previewData" class="chunk-list" style="max-height: 420px; overflow-y: auto">
+          <div v-for="(c, i) in previewData.chunks" :key="i" class="chunk-item">
+            <div class="chunk-head">
+              <n-space :size="6" align="center">
+                <n-tag size="tiny" :bordered="false" type="info">{{ c.kind === 'parent' ? '父块' : c.kind === 'child' ? '子块' : '分块' }}</n-tag>
+                <n-tag v-if="c.page" size="tiny" :bordered="false">第 {{ c.page }} 页</n-tag>
+                <n-tag v-if="c.heading" size="tiny" :bordered="false">{{ c.heading }}</n-tag>
+              </n-space>
+            </div>
+            <div class="chunk-text">{{ c.content }}</div>
+          </div>
+        </div>
+        <n-empty v-if="!previewLoading && previewData && previewData.chunks.length === 0" description="未切分出分块" />
+      </n-spin>
+      <template #footer>
+        <div style="display: flex; justify-content: space-between; align-items: center">
+          <span class="preview-hint">确认效果后点击「确认入库」，将按当前策略切块并向量化</span>
+          <n-space>
+            <n-button @click="showPreview = false">取消</n-button>
+            <n-button type="primary" @click="confirmIndex(previewFile)">确认入库</n-button>
+          </n-space>
         </div>
       </template>
     </n-modal>
@@ -175,6 +224,8 @@ import {
   uploadDoc,
   deleteDoc,
   reparseDoc,
+  indexDoc,
+  previewChunks,
   listChunks,
   testRetrieval
 } from '@/api'
@@ -191,6 +242,25 @@ const activeTab = ref('docs')
 const showImport = ref(false)
 
 const totalChunks = computed(() => docs.value.reduce((s, d) => s + (d.chunk_count || 0), 0))
+
+// ---------- 知识库元信息 ----------
+const kbTypeMeta: Record<string, { label: string; bg: string; color: string }> = {
+  generic: { label: '通用知识库', bg: '#eef3ff', color: '#3370ff' },
+  qa_pair: { label: '问答对知识库', bg: '#ecfdf3', color: '#22c55e' },
+  table: { label: '表格知识库', bg: '#fff7e8', color: '#f59e0b' },
+  website: { label: '网站同步', bg: '#f3efff', color: '#8b5cf6' },
+  feishu: { label: '飞书知识库', bg: '#e8f7ff', color: '#0ea5e9' }
+}
+const kbTypeLabel = computed(() => (kb.value ? kbTypeMeta[kb.value.kb_type]?.label || kb.value.kb_type : '通用知识库'))
+const kbTypeBg = computed(() => (kb.value ? kbTypeMeta[kb.value.kb_type]?.bg || '#eef3ff' : '#eef3ff'))
+const kbTypeColor = computed(() => (kb.value ? kbTypeMeta[kb.value.kb_type]?.color || '#3370ff' : '#3370ff'))
+const strategyShort = computed(() => {
+  const m: Record<string, string> = { smart: '智能', heading: '标题层级', separator: '自定义分隔', fixed: '固定长度', parent_child: '父子', semantic: '语义', qa_split: '问答对', page: '按页', table_row: '表格按行' }
+  return kb.value ? m[kb.value.chunk_strategy] || kb.value.chunk_strategy : '—'
+})
+const kbEmbedLabel = computed(() => (kb.value?.embedding_ref ? kb.value.embedding_ref.split(':')[1] || kb.value.embedding_ref : '全局默认'))
+const kbStatusLabel = computed(() => ({ available: '可用', indexing: '索引中', failed: '失败' } as any)[kb.value?.status || 'available'])
+const kbStatusType = computed(() => (kb.value?.status === 'indexing' ? 'warning' : kb.value?.status === 'failed' ? 'error' : 'success') as any)
 
 // ---------- 文档列表 ----------
 const docColumns = [
@@ -296,6 +366,8 @@ interface UploadingFile {
   progress: number
   statusText: string
   error: string
+  docId?: string
+  previewing?: boolean
 }
 
 const uploadingFiles = ref<UploadingFile[]>([])
@@ -312,12 +384,14 @@ function onFileChange(data: any) {
     })
     // 通过响应式代理更新进度，避免直接修改原始对象不触发视图
     const item = uploadingFiles.value[uploadingFiles.value.length - 1]
+    // auto_index=false：先预览分块，确认后再入库
     uploadDoc(route.params.id as string, file, p => {
       item.progress = p
-    })
-      .then(() => {
+    }, false)
+      .then((doc) => {
         item.status = 'done'
-        item.statusText = '已上传，等待解析'
+        item.statusText = '已上传，待预览确认'
+        item.docId = doc.id
       })
       .catch((e: any) => {
         item.status = 'failed'
@@ -332,11 +406,63 @@ function closeImport() {
   uploadingFiles.value = []
 }
 
-async function confirmImport() {
-  showImport.value = false
-  uploadingFiles.value = []
-  message.success('文档已提交，后台解析中')
-  await loadAll()
+// ---------- 试切块预览与确认入库 ----------
+const showPreview = ref(false)
+const previewFile = ref<UploadingFile | null>(null)
+const previewStrategy = ref<string>('')
+const previewData = ref<{ strategy: string; total: number; chunks: any[]; warnings: string[] } | null>(null)
+const previewLoading = ref(false)
+
+const strategyDesc: Record<string, string> = {
+  smart: '智能分块：识别标题和段落结构，自动递归切分',
+  heading: '按标题层级：H1–H3 切分，保留标题路径',
+  separator: '自定义分隔符：按指定符号切分',
+  fixed: '固定长度：按字符数和重叠量切分',
+  parent_child: '父子分块：小块召回，命中返回大块',
+  semantic: '语义分块：段落向量相似度突变处断开',
+  qa_split: '问答对拆分：模型提取问题-答案对',
+  page: '按页切分：一页一块，保留页码',
+  table_row: '表格按行：每行一块，表头作为上下文'
+}
+const strategyOptions = computed(() =>
+  Object.entries(strategyDesc).map(([value, label]) => ({ label: `${strategyShortName(value)} · ${label.split('：')[1] || label}`, value }))
+)
+const strategyShortName = (s: string) => ({ smart: '智能', heading: '标题层级', separator: '自定义分隔', fixed: '固定长度', parent_child: '父子', semantic: '语义', qa_split: '问答对', page: '按页', table_row: '表格按行' } as any)[s] || s
+
+async function openPreview(f: UploadingFile) {
+  previewFile.value = f
+  previewData.value = null
+  previewStrategy.value = kb.value?.chunk_strategy || 'smart'
+  showPreview.value = true
+  f.previewing = true
+  await loadPreview()
+  f.previewing = false
+}
+
+async function loadPreview() {
+  if (!previewFile.value?.docId) return
+  previewLoading.value = true
+  try {
+    previewData.value = await previewChunks(previewFile.value.docId, previewStrategy.value || undefined)
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+async function confirmIndex(f: UploadingFile | null) {
+  if (!f?.docId) return
+  try {
+    await indexDoc(f.docId)
+    showPreview.value = false
+    showImport.value = false
+    uploadingFiles.value = []
+    message.success('已提交索引入库，后台解析中')
+    await loadAll()
+  } catch (e: any) {
+    message.error(e.message)
+  }
 }
 
 function doReparse(row: Doc) {
@@ -527,6 +653,38 @@ onUnmounted(() => {
 
 .file-sub {
   margin-top: 6px;
+  font-size: 12px;
+  color: #a8adb5;
+}
+
+.meta-item {
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.meta-item b {
+  color: #1f2329;
+}
+
+.file-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.preview-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.preview-label {
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.preview-hint {
   font-size: 12px;
   color: #a8adb5;
 }
