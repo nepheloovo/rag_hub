@@ -36,6 +36,64 @@
           </div>
         </n-tab-pane>
 
+        <!-- SSO 配置 -->
+        <n-tab-pane name="sso" tab="SSO 配置">
+          <div style="margin-top: 12px; max-width: 640px">
+            <n-card size="small" title="飞书登录" :bordered="true">
+              <n-form label-placement="left" label-width="100">
+                <n-form-item label="启用飞书登录">
+                  <n-switch v-model:value="ssoForm.feishu_enabled" />
+                </n-form-item>
+                <n-form-item label="App ID">
+                  <n-input v-model:value="ssoForm.feishu_app_id" placeholder="cli_xxxx（飞书开放平台创建企业自建应用后获取）" />
+                </n-form-item>
+                <n-form-item label="App Secret">
+                  <n-input
+                    v-model:value="ssoForm.feishu_app_secret"
+                    type="password"
+                    show-password-on="click"
+                    :placeholder="ssoForm.feishu_has_secret ? '已配置（输入新值可覆盖）' : '应用密钥'"
+                  />
+                </n-form-item>
+                <n-form-item label="回调地址">
+                  <n-input :value="feishuCallbackUrl" readonly />
+                  <div class="field-hint" style="margin-left: 12px">在飞书开放平台「安全设置 → 重定向 URL」中填入此地址</div>
+                </n-form-item>
+              </n-form>
+              <div style="display: flex; justify-content: flex-end">
+                <n-button type="primary" size="small" :loading="ssoSaving" @click="saveSso">保存</n-button>
+              </div>
+            </n-card>
+            <n-card size="small" title="企业微信登录" :bordered="true" style="margin-top: 12px">
+              <n-form label-placement="left" label-width="100">
+                <n-form-item label="启用">
+                  <n-switch v-model:value="ssoForm.wecom_enabled" />
+                </n-form-item>
+                <n-form-item label="企业 ID (CorpID)">
+                  <n-input v-model:value="ssoForm.wecom_corp_id" placeholder="wwxxxxxxxx" />
+                </n-form-item>
+                <n-form-item label="应用 AgentId">
+                  <n-input v-model:value="ssoForm.wecom_agent_id" placeholder="1000002" />
+                </n-form-item>
+                <n-form-item label="应用 Secret">
+                  <n-input
+                    v-model:value="ssoForm.wecom_secret"
+                    type="password"
+                    show-password-on="click"
+                    :placeholder="ssoForm.wecom_has_secret ? '已配置（输入新值可覆盖）' : '应用密钥'"
+                  />
+                </n-form-item>
+              </n-form>
+              <div style="display: flex; justify-content: flex-end">
+                <n-button type="primary" size="small" :loading="ssoSaving" @click="saveSso">保存</n-button>
+              </div>
+              <n-alert type="warning" :bordered="false" style="margin-top: 10px">
+                企业微信 OAuth 回调流程规划中，当前先保存凭证；真实登录接入后续版本开放。
+              </n-alert>
+            </n-card>
+          </div>
+        </n-tab-pane>
+
         <!-- 审计日志 -->
         <n-tab-pane name="audit" tab="审计日志">
           <div class="filter-row" style="margin: 12px 0">
@@ -88,7 +146,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, h, onMounted, reactive } from 'vue'
+import { ref, h, computed, onMounted, reactive } from 'vue'
 import { useMessage, useDialog, NTag, NButton, NSwitch } from 'naive-ui'
 import { AddOutline } from '@vicons/ionicons5'
 import { createUser, listAudit, listApps, listUsers, updateApp, updateUser } from '@/api'
@@ -101,6 +159,58 @@ const users = ref<any[]>([])
 const loading = ref(false)
 const showCreateUser = ref(false)
 const creating = ref(false)
+
+// ---------- SSO 配置 ----------
+const ssoForm = reactive({
+  feishu_enabled: false,
+  feishu_app_id: '',
+  feishu_app_secret: '',
+  feishu_has_secret: false,
+  wecom_enabled: false,
+  wecom_corp_id: '',
+  wecom_agent_id: '',
+  wecom_secret: '',
+  wecom_has_secret: false
+})
+const ssoSaving = ref(false)
+const feishuCallbackUrl = computed(() => `${location.origin}/api/auth/feishu/callback`)
+
+async function loadSso() {
+  try {
+    const { api } = await import('@/api/client')
+    const cfg = await api('/sso')
+    Object.assign(ssoForm, cfg)
+    ssoForm.feishu_app_secret = ''
+    ssoForm.wecom_secret = ''
+  } catch {
+    /* 静默 */
+  }
+}
+
+async function saveSso() {
+  ssoSaving.value = true
+  try {
+    const { api } = await import('@/api/client')
+    await api('/sso', {
+      method: 'PUT',
+      body: JSON.stringify({
+        feishu_enabled: ssoForm.feishu_enabled,
+        feishu_app_id: ssoForm.feishu_app_id,
+        feishu_app_secret: ssoForm.feishu_app_secret || null,
+        wecom_enabled: ssoForm.wecom_enabled,
+        wecom_corp_id: ssoForm.wecom_corp_id,
+        wecom_agent_id: ssoForm.wecom_agent_id,
+        wecom_secret: ssoForm.wecom_secret || null
+      })
+    })
+    message.success('SSO 配置已保存')
+    await loadSso()
+  } catch (e: any) {
+    message.error(e.message)
+  } finally {
+    ssoSaving.value = false
+  }
+}
 
 const roleLabels: Record<string, string> = {
   platform_admin: '平台管理员',
@@ -343,6 +453,7 @@ function setLimit(row: Application) {
 onMounted(() => {
   load()
   loadAudit()
+  loadSso()
 })
 </script>
 

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import apps, audit, auth, chat, health, knowledge, logs, providers, public, stats, tools, users
+from app.api import apps, audit, auth, chat, health, knowledge, logs, providers, public, sso, stats, tools, users
 from app.api.deps import get_current_user, require_roles
 from app.config import settings
 from app.database import Base, SessionLocal, engine
@@ -93,4 +93,10 @@ app.include_router(
 )
 app.include_router(
     audit.router, prefix=settings.api_prefix, dependencies=[Depends(get_current_user)]
+)
+
+app.include_router(
+    sso.router,
+    prefix=settings.api_prefix,
+    dependencies=[Depends(require_roles("platform_admin"))],
 )

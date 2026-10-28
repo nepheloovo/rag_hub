@@ -31,13 +31,14 @@
 
       <n-divider>或使用企业身份登录</n-divider>
       <div class="sso-row">
-        <n-button block secondary :disabled="!sso.feishu.enabled" @click="ssoHint('feishu')">
+        <n-button block secondary :disabled="!sso.feishu.enabled" @click="feishuLogin">
           飞书登录
         </n-button>
         <n-button block secondary :disabled="!sso.wecom.enabled" @click="ssoHint('wecom')">
           企业微信登录
         </n-button>
       </div>
+      <div v-if="!sso.feishu.enabled" class="sso-tip">{{ sso.feishu.note }}</div>
       <div class="demo-hint">
         演示账号：admin / admin123（平台管理员）
       </div>
@@ -79,11 +80,29 @@ function ssoHint(channel: string) {
   message.info(channel === 'feishu' ? sso.value.feishu.note : sso.value.wecom.note)
 }
 
+function feishuLogin() {
+  if (!sso.value.feishu.enabled) {
+    ssoHint('feishu')
+    return
+  }
+  // 跳转后端发起飞书授权
+  window.location.href = '/api/auth/feishu/login'
+}
+
 onMounted(async () => {
   try {
     sso.value = await api('/auth/sso-config')
   } catch {
     /* 静默 */
+  }
+  // 回调带错误信息时提示
+  const errMsg = new URLSearchParams(location.search).get('error')
+  if (errMsg) {
+    try {
+      message.error(decodeURIComponent(new URLSearchParams(errMsg).get('msg') || errMsg))
+    } catch {
+      message.error(decodeURIComponent(errMsg))
+    }
   }
   // 已登录直接进入
   if (store.token) {
@@ -153,6 +172,13 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+
+.sso-tip {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #a8adb5;
+  text-align: center;
 }
 
 .demo-hint {

@@ -7,6 +7,11 @@ const routes = [
     component: () => import('@/views/LoginView.vue')
   },
   {
+    path: '/sso-callback',
+    name: 'sso-callback',
+    component: () => import('@/views/SsoCallback.vue')
+  },
+  {
     path: '/pub/:appId',
     name: 'public-chat',
     component: () => import('@/views/PublicChat.vue')
