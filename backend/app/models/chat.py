@@ -12,8 +12,9 @@ class Conversation(Base):
     __tablename__ = "conversations"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    kb_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True
+    # 应用会话可能未绑定知识库（Chat Flow 应用），故可空
+    kb_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True, nullable=True
     )
     # 应用会话：绑定应用（应用级对话时使用，kb_id 存第一个绑定的知识库）
     app_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)

@@ -29,6 +29,7 @@ class ApplicationUpdate(BaseModel):
     suggested_questions: Optional[list[str]] = None
     fallback_reply: Optional[str] = None
     transfer_hint: Optional[str] = None
+    flow: Optional[dict] = None  # Chat Flow 编排（保存时自动生成版本快照）
 
 
 class ApplicationOut(BaseModel):
@@ -49,12 +50,18 @@ class ApplicationOut(BaseModel):
     suggested_questions: list[str]
     fallback_reply: str
     transfer_hint: str
+    flow: Optional[dict] = None
+    flow_history: dict = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
     # 统计（由 API 填充，非 ORM 字段）
     call_count_7d: int = 0
 
     model_config = {"from_attributes": True}
+
+
+class AppRestoreRequest(BaseModel):
+    version: int
 
 
 class AppGenerateRequest(BaseModel):

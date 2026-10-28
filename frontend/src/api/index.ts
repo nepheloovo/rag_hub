@@ -1,5 +1,6 @@
 // 后端 API 函数集
 import { api, sseStream, uploadFile } from './client'
+export { api } from './client'
 import type {
   AppDoneData,
   AppGenerateDraft,

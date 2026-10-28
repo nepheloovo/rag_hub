@@ -142,6 +142,8 @@ export interface Application {
   suggested_questions: string[]
   fallback_reply: string
   transfer_hint: string
+  flow: { nodes: any[]; edges: any[] } | null
+  flow_history: Record<string, any>
   call_count_7d: number
   created_at: string
   updated_at: string

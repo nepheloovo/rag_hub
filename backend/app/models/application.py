@@ -39,6 +39,10 @@ class Application(Base):
     # 客服专属：未检索到内容时的兜底话术 / 转人工提示
     fallback_reply: Mapped[str] = mapped_column(Text, default="")
     transfer_hint: Mapped[str] = mapped_column(Text, default="")
+    # Chat Flow 编排：{"nodes": [...], "edges": [...]}
+    flow: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
+    # 版本快照：{"2": {flow}, "3": {flow}, ...}（上限 20）
+    flow_history: Mapped[dict] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

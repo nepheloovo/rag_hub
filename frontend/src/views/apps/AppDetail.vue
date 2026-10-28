@@ -143,6 +143,10 @@
         </div>
       </n-tab-pane>
 
+      <n-tab-pane v-if="canManage" name="flow" tab="编排">
+        <FlowEditor :app-id="route.params.id as string" />
+      </n-tab-pane>
+
       <n-tab-pane v-if="canManage" name="config" tab="配置">
         <n-card size="small" title="基础配置" style="max-width: 760px; margin-bottom: 16px">
           <n-form label-placement="left" label-width="100">
@@ -157,8 +161,8 @@
                 v-model:value="form.app_kind"
                 :options="[
                   { label: '简易（提示词 + 知识库 + 表单）', value: 'simple' },
-                  { label: 'Chat Flow（可视化编排，规划中）', value: 'chatflow', disabled: true },
-                  { label: 'Agent（自主规划工具，规划中）', value: 'agent', disabled: true }
+                  { label: 'Chat Flow（可视化编排）', value: 'chatflow' },
+                  { label: 'Agent（自主规划工具，Phase 3 开放）', value: 'agent', disabled: true }
                 ]"
               />
             </n-form-item>
@@ -278,6 +282,7 @@ import {
 } from '@/api'
 import type { AppKind, AppStatus, Application, ChatMessage, Conversation, KnowledgeBase, Provider, RefItem } from '@/api/types'
 import { useAppStore } from '@/stores/app'
+import FlowEditor from './FlowEditor.vue'
 
 interface Msg {
   id: string
