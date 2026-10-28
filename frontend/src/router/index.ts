@@ -10,7 +10,13 @@ const routes = [
     path: '/app',
     component: () => import('@/layouts/MainLayout.vue'),
     children: [
-      { path: '', redirect: '/app/apps' },
+      { path: '', redirect: '/app/workbench' },
+      {
+        path: 'workbench',
+        name: 'workbench',
+        component: () => import('@/views/workbench/Workbench.vue'),
+        meta: { title: '工作台', roles: ['admin', 'manager', 'user'] }
+      },
       {
         path: 'apps',
         name: 'apps',
@@ -42,6 +48,24 @@ const routes = [
         meta: { title: '知识库详情', roles: ['admin', 'manager'] }
       },
       {
+        path: 'tools',
+        name: 'tools',
+        component: () => import('@/views/placeholder/ToolsView.vue'),
+        meta: { title: '工具', roles: ['admin', 'manager'] }
+      },
+      {
+        path: 'dashboard',
+        name: 'dashboard',
+        component: () => import('@/views/placeholder/DashboardView.vue'),
+        meta: { title: '看板', roles: ['admin', 'manager'] }
+      },
+      {
+        path: 'settings',
+        name: 'settings',
+        component: () => import('@/views/placeholder/SettingsView.vue'),
+        meta: { title: '设置', roles: ['admin'] }
+      },
+      {
         path: 'models',
         name: 'models',
         component: () => import('@/views/settings/ModelConfig.vue'),
@@ -62,12 +86,12 @@ const router = createRouter({
   routes
 })
 
-// 简单角色守卫：未选角色跳回选择页；无权限页面重定向到对话页
+// 简单角色守卫：未选角色跳回选择页；无权限页面重定向到工作台
 router.beforeEach(to => {
   const role = localStorage.getItem('rag-zhongtai-role')
   if (to.path.startsWith('/app') && !role) return { path: '/' }
   if (to.meta.roles && role && !(to.meta.roles as string[]).includes(role)) {
-    return { path: '/app/chat' }
+    return { path: '/app/workbench' }
   }
   return true
 })

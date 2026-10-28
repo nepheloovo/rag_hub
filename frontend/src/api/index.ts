@@ -2,6 +2,7 @@
 import { api, sseStream, uploadFile } from './client'
 import type {
   AppDoneData,
+  AppGenerateDraft,
   Application,
   ChatDoneData,
   ChatMessage,
@@ -13,7 +14,8 @@ import type {
   LogStats,
   ModelDefaults,
   Provider,
-  RetrievalChunk
+  RetrievalChunk,
+  StatsOverview
 } from './types'
 
 // ---------- 知识库 ----------
@@ -78,8 +80,15 @@ export const getLogStats = () => api<LogStats>('/logs/stats')
 
 // ---------- 应用 ----------
 export const listApps = () => api<Application[]>('/apps')
-export const createApp = (data: { name: string; description?: string; app_type: string; kb_ids: string[] }) =>
-  api<Application>('/apps', { method: 'POST', body: JSON.stringify(data) })
+export const createApp = (data: {
+  name: string
+  description?: string
+  app_type: string
+  app_kind?: string
+  status?: string
+  category?: string
+  kb_ids: string[]
+}) => api<Application>('/apps', { method: 'POST', body: JSON.stringify(data) })
 export const getApp = (id: string) => api<Application>(`/apps/${id}`)
 export const updateApp = (id: string, data: Partial<Application>) =>
   api<Application>(`/apps/${id}`, { method: 'PUT', body: JSON.stringify(data) })
@@ -87,3 +96,9 @@ export const deleteApp = (id: string) => api(`/apps/${id}`, { method: 'DELETE' }
 export const streamAppChat = (appId: string, body: { query: string; role: string; conversation_id?: string | null }) =>
   sseStream<AppDoneData | { text: string } | { message: string }>(`/apps/${appId}/chat`, body)
 export const listAppConversations = (appId: string) => listConversations(undefined, appId)
+export const generateApp = (description: string) =>
+  api<{ draft: AppGenerateDraft; models: { llm: string; fake: boolean } }>('/apps/generate', {
+    method: 'POST',
+    body: JSON.stringify({ description })
+  })
+export const getStatsOverview = () => api<StatsOverview>('/stats/overview')

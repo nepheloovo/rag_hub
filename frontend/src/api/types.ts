@@ -4,8 +4,13 @@ export interface KnowledgeBase {
   id: string
   name: string
   description: string
+  kb_type: string
+  chunk_strategy: string
+  status: string
+  embedding_ref: string
   doc_count: number
   chunk_count: number
+  used_by_apps: string[]
   created_at: string
   updated_at: string
 }
@@ -75,6 +80,7 @@ export interface ChatDoneData {
 export interface Conversation {
   id: string
   kb_id: string
+  app_id?: string | null
   role: string
   title: string
   created_at: string
@@ -115,12 +121,18 @@ export interface LogStats {
 
 // ---------- 应用 ----------
 export type AppType = 'qa' | 'service' | 'report'
+export type AppKind = 'simple' | 'chatflow' | 'agent'
+export type AppStatus = 'draft' | 'reviewing' | 'published'
 
 export interface Application {
   id: string
   name: string
   description: string
   app_type: AppType
+  app_kind: AppKind
+  status: AppStatus
+  version: number
+  category: string
   kb_ids: string[]
   llm_ref: string
   system_prompt: string
@@ -130,8 +142,28 @@ export interface Application {
   suggested_questions: string[]
   fallback_reply: string
   transfer_hint: string
+  call_count_7d: number
   created_at: string
   updated_at: string
+}
+
+export interface AppGenerateDraft {
+  name: string
+  app_type: AppType
+  category: string
+  description: string
+  system_prompt: string
+  opening: string
+  suggested_questions: string[]
+}
+
+export interface StatsOverview {
+  month_app_calls: number
+  month_new_docs: number
+  month_new_apps: number
+  kb_count: number
+  app_count: number
+  published_count: number
 }
 
 export interface AppDoneData {

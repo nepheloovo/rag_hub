@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=str(BASE_DIR / ".env"), extra="ignore")
 
     # 基础
-    app_name: str = "企业知识库中台"
+    app_name: str = "知枢 · AI 应用中台"
     api_prefix: str = "/api"
     debug: bool = True
 

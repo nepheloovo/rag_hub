@@ -5,10 +5,10 @@
         <div class="logo-mark">
           <n-icon size="26" color="#fff"><Library /></n-icon>
         </div>
-        <span class="logo-text">企业知识库中台</span>
+        <span class="logo-text">知枢 · AI 应用中台</span>
       </div>
       <h2 class="title">选择你的角色进入</h2>
-      <p class="subtitle">当前为 1.0 内测版本，暂未接入登录，请选择本次会话使用的角色</p>
+      <p class="subtitle">当前为原型阶段，暂未接入登录，请选择本次会话使用的角色</p>
 
       <div class="role-grid">
         <div
@@ -66,7 +66,7 @@ const roles: { key: Role; label: string; desc: string; icon: any }[] = [
 function enter() {
   if (!selected.value) return
   store.setRole(selected.value)
-  router.push('/app/apps')
+  router.push('/app/workbench')
 }
 </script>
 

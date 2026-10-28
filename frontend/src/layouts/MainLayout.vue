@@ -8,9 +8,9 @@
     >
       <div class="side-logo">
         <div class="logo-mark">
-          <n-icon size="20" color="#fff"><Library /></n-icon>
+          <n-icon size="20" color="#fff"><GridOutline /></n-icon>
         </div>
-        <span>知识库中台</span>
+        <span>知枢</span>
       </div>
 
       <n-menu
@@ -63,10 +63,11 @@ import { NIcon } from 'naive-ui'
 import {
   Library,
   GridOutline,
-  ChatbubblesOutline,
+  HomeOutline,
+  ConstructOutline,
+  BarChartOutline,
   FolderOpenOutline,
   SettingsOutline,
-  PulseOutline,
   ExitOutline
 } from '@vicons/ionicons5'
 import { useAppStore } from '@/stores/app'
@@ -80,11 +81,12 @@ function renderIcon(icon: any) {
 }
 
 const allMenus = [
+  { key: 'workbench', label: '工作台', icon: renderIcon(markRaw(HomeOutline)), path: '/app/workbench', roles: ['admin', 'manager', 'user'] },
   { key: 'apps', label: '应用', icon: renderIcon(markRaw(GridOutline)), path: '/app/apps', roles: ['admin', 'manager', 'user'] },
-  { key: 'chat', label: '对话（调试）', icon: renderIcon(markRaw(ChatbubblesOutline)), path: '/app/chat', roles: ['admin', 'manager', 'user'] },
   { key: 'knowledge', label: '知识库', icon: renderIcon(markRaw(FolderOpenOutline)), path: '/app/knowledge', roles: ['admin', 'manager'] },
-  { key: 'models', label: '模型配置', icon: renderIcon(markRaw(SettingsOutline)), path: '/app/models', roles: ['admin'] },
-  { key: 'logs', label: '日志监测', icon: renderIcon(markRaw(PulseOutline)), path: '/app/logs', roles: ['admin'] }
+  { key: 'tools', label: '工具', icon: renderIcon(markRaw(ConstructOutline)), path: '/app/tools', roles: ['admin', 'manager'] },
+  { key: 'dashboard', label: '看板', icon: renderIcon(markRaw(BarChartOutline)), path: '/app/dashboard', roles: ['admin', 'manager'] },
+  { key: 'settings', label: '设置', icon: renderIcon(markRaw(SettingsOutline)), path: '/app/settings', roles: ['admin'] }
 ]
 
 const menuOptions = computed(() =>
@@ -96,8 +98,10 @@ const menuOptions = computed(() =>
 const activeKey = computed(() => {
   if (route.name === 'knowledge-detail') return 'knowledge'
   if (route.name === 'app-detail') return 'apps'
+  if (route.name === 'models') return 'settings'
+  if (route.name === 'logs') return 'settings'
   const found = allMenus.find(m => m.path === route.path)
-  return found ? found.key : 'chat'
+  return found ? found.key : 'workbench'
 })
 
 function onMenuSelect(key: string) {

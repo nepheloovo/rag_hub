@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import apps, chat, health, knowledge, logs, providers
+from app.api import apps, chat, health, knowledge, logs, providers, stats
 from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.services.provider_service import seed_presets
@@ -36,3 +36,4 @@ app.include_router(knowledge.doc_router, prefix=settings.api_prefix)
 app.include_router(chat.router, prefix=settings.api_prefix)
 app.include_router(apps.router, prefix=settings.api_prefix)
 app.include_router(logs.router, prefix=settings.api_prefix)
+app.include_router(stats.router, prefix=settings.api_prefix)

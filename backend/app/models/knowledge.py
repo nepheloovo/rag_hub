@@ -16,6 +16,14 @@ class KnowledgeBase(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
+    # 知识库类型：generic / qa_pair / table / website / feishu
+    kb_type: Mapped[str] = mapped_column(String(16), default="generic", index=True)
+    # 分块策略：smart/heading/separator/fixed/parent_child/semantic/qa_split/page/table_row
+    chunk_strategy: Mapped[str] = mapped_column(String(16), default="heading")
+    # 状态：available / indexing / failed
+    status: Mapped[str] = mapped_column(String(16), default="available", index=True)
+    # 绑定 embedding 模型 "provider:model"（空=全局默认）
+    embedding_ref: Mapped[str] = mapped_column(String(128), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

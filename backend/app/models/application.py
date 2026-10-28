@@ -1,11 +1,15 @@
-"""应用模型：问答应用 / 智能客服 / 报告分析（类型=预设模板差异）"""
+"""应用模型：简易(simple) / Chat Flow(chatflow) / Agent(agent)，草稿→评测中→已发布"""
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+
+APP_KINDS = ("simple", "chatflow", "agent")
+APP_STATUSES = ("draft", "reviewing", "published")
+APP_CATEGORIES = ("报告撰写", "智能客服", "制度与合同审校", "营销内容", "办公提效")
 
 
 class Application(Base):
@@ -16,6 +20,13 @@ class Application(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     # qa=问答应用 / service=智能客服 / report=报告分析
     app_type: Mapped[str] = mapped_column(String(16), nullable=False, default="qa", index=True)
+    # 应用形态：simple / chatflow / agent
+    app_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="simple", index=True)
+    # 发布状态：draft / reviewing / published
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    # 业务场景分类
+    category: Mapped[str] = mapped_column(String(32), default="办公提效", index=True)
     # 绑定知识库（可多库）
     kb_ids: Mapped[list] = mapped_column(JSONB, default=list)
     # "provider_id:model"，空 = 使用全局默认 LLM

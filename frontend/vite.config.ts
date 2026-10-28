@@ -22,7 +22,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        // 开发后端（宿主 uvicorn:8001）；容器部署时 nginx 反代 backend:8000
+        target: process.env.VITE_PROXY_TARGET || 'http://localhost:8001',
         changeOrigin: true
       }
     }

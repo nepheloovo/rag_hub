@@ -46,6 +46,8 @@ def _get_kb(db: Session, kb_id: str) -> KnowledgeBase:
 
 @kb_router.get("", response_model=list[KnowledgeBaseOut])
 def list_kbs(db: Session = Depends(get_db)):
+    from app.models import Application
+
     rows = (
         db.query(
             KnowledgeBase,
@@ -57,11 +59,13 @@ def list_kbs(db: Session = Depends(get_db)):
         .order_by(KnowledgeBase.created_at.desc())
         .all()
     )
+    apps = db.query(Application).all()
     result = []
     for kb, doc_count, chunk_count in rows:
         out = KnowledgeBaseOut.model_validate(kb)
         out.doc_count = doc_count
         out.chunk_count = chunk_count
+        out.used_by_apps = [a.name for a in apps if kb.id in (a.kb_ids or [])]
         result.append(out)
     return result
 
@@ -70,7 +74,16 @@ def list_kbs(db: Session = Depends(get_db)):
 def create_kb(data: KnowledgeBaseCreate, db: Session = Depends(get_db)):
     if not data.name.strip():
         raise HTTPException(status_code=422, detail="知识库名称不能为空")
-    kb = KnowledgeBase(id=uuid.uuid4().hex, name=data.name.strip(), description=data.description)
+    if data.kb_type not in ("generic", "qa_pair", "table", "website", "feishu"):
+        data.kb_type = "generic"
+    kb = KnowledgeBase(
+        id=uuid.uuid4().hex,
+        name=data.name.strip(),
+        description=data.description,
+        kb_type=data.kb_type,
+        chunk_strategy=data.chunk_strategy,
+        embedding_ref=data.embedding_ref,
+    )
     db.add(kb)
     db.commit()
     db.refresh(kb)

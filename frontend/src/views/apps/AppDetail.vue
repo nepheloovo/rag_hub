@@ -10,7 +10,10 @@
           <div class="title-row">
             <h2 class="page-title">{{ app?.name || '应用详情' }}</h2>
             <n-tag v-if="app" size="small" :bordered="false" :color="{ color: typeBg, textColor: typeColor }">
-              {{ typeLabel }}
+              {{ kindLabel }}
+            </n-tag>
+            <n-tag v-if="app" size="small" :bordered="false" :type="statusTagType">
+              {{ statusLabel(app.status) }} · v{{ app.version }}
             </n-tag>
           </div>
           <p class="page-desc">{{ app?.description || '暂无描述' }}</p>
@@ -149,6 +152,35 @@
             <n-form-item label="描述">
               <n-input v-model:value="form.description" />
             </n-form-item>
+            <n-form-item label="应用形态">
+              <n-select
+                v-model:value="form.app_kind"
+                :options="[
+                  { label: '简易（提示词 + 知识库 + 表单）', value: 'simple' },
+                  { label: 'Chat Flow（可视化编排，规划中）', value: 'chatflow', disabled: true },
+                  { label: 'Agent（自主规划工具，规划中）', value: 'agent', disabled: true }
+                ]"
+              />
+            </n-form-item>
+            <n-form-item label="发布状态">
+              <n-select
+                v-model:value="form.status"
+                :options="[
+                  { label: '草稿', value: 'draft' },
+                  { label: '评测中', value: 'reviewing' },
+                  { label: '已发布', value: 'published' }
+                ]"
+              />
+            </n-form-item>
+            <n-form-item label="业务分类">
+              <n-select
+                v-model:value="form.category"
+                :options="['报告撰写', '智能客服', '制度与合同审校', '营销内容', '办公提效'].map(c => ({ label: c, value: c }))"
+              />
+            </n-form-item>
+            <n-form-item label="当前版本">
+              <span class="field-hint">v{{ app?.version || 1 }}（每次保存自动 +1）</span>
+            </n-form-item>
             <n-form-item label="绑定知识库">
               <n-select
                 v-model:value="form.kb_ids"
@@ -244,7 +276,7 @@ import {
   streamAppChat,
   updateApp
 } from '@/api'
-import type { Application, ChatMessage, Conversation, KnowledgeBase, Provider, RefItem } from '@/api/types'
+import type { AppKind, AppStatus, Application, ChatMessage, Conversation, KnowledgeBase, Provider, RefItem } from '@/api/types'
 import { useAppStore } from '@/stores/app'
 
 interface Msg {
@@ -277,6 +309,15 @@ const typeLabel = computed(() => (app.value ? typeMap[app.value.app_type]?.label
 const typeColor = computed(() => (app.value ? typeMap[app.value.app_type]?.color || '#3370ff' : '#3370ff'))
 const typeBg = computed(() => (app.value ? typeMap[app.value.app_type]?.bg || '#eef3ff' : '#eef3ff'))
 const typeIcon = computed(() => (app.value ? typeMap[app.value.app_type]?.icon || ChatbubblesOutline : ChatbubblesOutline))
+const kindLabel = computed(() => {
+  const m: Record<string, string> = { simple: '简易', chatflow: 'Chat Flow', agent: 'Agent' }
+  return app.value ? m[app.value.app_kind] || '简易' : '简易'
+})
+const statusLabel = (s: string) => ({ draft: '草稿', reviewing: '评测中', published: '已发布' } as any)[s] || s
+const statusTagType = computed(() => {
+  if (!app.value) return 'default'
+  return app.value.status === 'published' ? 'success' : app.value.status === 'reviewing' ? 'warning' : 'default'
+})
 
 // 对话
 const conversations = ref<Conversation[]>([])
@@ -297,6 +338,9 @@ const currentModelLabel = computed(() => {
 const form = reactive({
   name: '',
   description: '',
+  app_kind: 'simple' as AppKind,
+  status: 'draft' as AppStatus,
+  category: '办公提效',
   kb_ids: [] as string[],
   llm_ref: '' as string | null,
   system_prompt: '',
@@ -345,6 +389,9 @@ async function loadApp() {
 function fillForm(a: Application) {
   form.name = a.name
   form.description = a.description
+  form.app_kind = a.app_kind
+  form.status = a.status
+  form.category = a.category
   form.kb_ids = [...a.kb_ids]
   form.llm_ref = a.llm_ref || null
   form.system_prompt = a.system_prompt
@@ -450,6 +497,9 @@ async function saveConfig() {
     const updated = await updateApp(route.params.id as string, {
       name: form.name,
       description: form.description,
+      app_kind: form.app_kind,
+      status: form.status,
+      category: form.category,
       kb_ids: form.kb_ids,
       llm_ref: form.llm_ref || '',
       system_prompt: form.system_prompt,
@@ -462,7 +512,7 @@ async function saveConfig() {
     })
     app.value = updated
     fillForm(updated)
-    message.success('配置已保存')
+    message.success('配置已保存（版本 +1）')
   } catch (e: any) {
     message.error(e.message)
   } finally {
