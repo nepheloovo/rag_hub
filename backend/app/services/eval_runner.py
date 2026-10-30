@@ -58,7 +58,7 @@ def run_application(app: Application, question: str) -> dict:
 
     runtime = Application(id=app.id, **snapshot_app(app))
     response = app_chat_response(
-        app.id, AppChatRequest(query=question, draft=True), source="eval", application=runtime
+        app.id, AppChatRequest(query=question, draft=True, role="eval"), source="eval", application=runtime
     )
 
     async def consume() -> dict:

@@ -9,6 +9,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     AiDesignModal: typeof import('./components/release/AiDesignModal.vue')['default']
     AppEvalPanel: typeof import('./components/release/AppEvalPanel.vue')['default']
+    BadFeedbackPanel: typeof import('./components/insights/BadFeedbackPanel.vue')['default']
     BillingPanel: typeof import('./components/obs/BillingPanel.vue')['default']
     BuildPanel: typeof import('./components/obs/BuildPanel.vue')['default']
     CaseFlowModal: typeof import('./components/obs/CaseFlowModal.vue')['default']
@@ -16,6 +17,7 @@ declare module 'vue' {
     ConversationLogs: typeof import('./components/obs/ConversationLogs.vue')['default']
     EvalRunPanel: typeof import('./components/release/EvalRunPanel.vue')['default']
     JsonBlock: typeof import('./components/obs/JsonBlock.vue')['default']
+    KnowledgeGapPanel: typeof import('./components/insights/KnowledgeGapPanel.vue')['default']
     MessageFeedback: typeof import('./components/chat/MessageFeedback.vue')['default']
     MetricStrip: typeof import('./components/obs/MetricStrip.vue')['default']
     NAlert: typeof import('naive-ui')['NAlert']

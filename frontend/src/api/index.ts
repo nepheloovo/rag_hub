@@ -2,6 +2,8 @@
 import { api, sseStream, uploadFile } from './client'
 export { api } from './client'
 import type {
+  BadFeedbackItem,
+  KnowledgeGap,
   AppDoneData,
   AppGenerateDraft,
   AppReleases,
@@ -106,7 +108,7 @@ export const streamChat = (body: { kb_id: string; query: string; role: string; c
   sseStream<ChatDoneData | { text: string } | { message: string }>('/chat', body)
 
 // ---------- 日志 ----------
-export const listLogs = (params: { role?: string; kb_id?: string; status?: string; q?: string; page?: number; page_size?: number }) => {
+export const listLogs = (params: { role?: string; kb_id?: string; status?: string; q?: string; feedback?: 'like' | 'dislike' | 'any'; page?: number; page_size?: number }) => {
   const qs = new URLSearchParams()
   Object.entries(params).forEach(([k, v]) => {
     if (v !== undefined && v !== null && v !== '') qs.set(k, String(v))
@@ -147,6 +149,11 @@ export const generateApp = (description: string) =>
     body: JSON.stringify({ description })
   })
 export const getStatsOverview = () => api<StatsOverview>('/stats/overview')
+export const getKnowledgeGaps = (days = 30, appId?: string) =>
+  api<KnowledgeGap[]>(`/stats/knowledge-gaps?days=${days}${appId ? `&app_id=${encodeURIComponent(appId)}` : ''}`)
+export const getBadFeedback = (limit = 20) => api<BadFeedbackItem[]>(`/stats/bad-feedback?limit=${limit}`)
+export const supplementKnowledge = (data: { kb_id: string; question: string; answer: string }) =>
+  api<Doc>('/stats/knowledge-gaps/supplement', { method: 'POST', body: JSON.stringify(data) })
 export const getStatsTrend = (days = 14) =>
   api<{ dates: string[]; calls: number[]; docs: number[]; apps: number[] }>(`/stats/trend?days=${days}`)
 

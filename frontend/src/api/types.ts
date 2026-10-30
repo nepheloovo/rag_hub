@@ -124,6 +124,8 @@ export interface LogItem {
   duration_ms: number
   status: 'success' | 'error'
   trace_id?: string
+  /** 回答反馈：-1 点踩 / 1 点赞 / 0 无 */
+  feedback?: -1 | 0 | 1
 }
 
 export interface LogStats {
@@ -219,6 +221,38 @@ export interface StatsOverview {
   kb_count: number
   app_count: number
   published_count: number
+  /** 近 30 天满意度（%），无反馈为 null */
+  satisfaction: number | null
+  like_count: number
+  dislike_count: number
+  /** 近 30 天知识命中率（%），无数据为 null */
+  hit_rate: number | null
+  miss_count: number
+}
+
+export interface KnowledgeGap {
+  key: string
+  question: string
+  count: number
+  dislike_count: number
+  miss_count: number
+  apps: string[]
+  kb_names: string[]
+  kb_ids: string[]
+  sample_questions: string[]
+  last_time: string
+}
+
+export interface BadFeedbackItem {
+  message_id: string
+  trace_id: string
+  app_id: string
+  app_name: string
+  question: string
+  answer: string
+  comment: string
+  user_id: string
+  time: string
 }
 
 // ---------- 工具 ----------

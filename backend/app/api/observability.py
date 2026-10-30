@@ -100,7 +100,10 @@ def overview(
 ):
     now = datetime.now()
     start = now - timedelta(days=days)
-    runs = db.query(TraceRun).filter(TraceRun.started_at >= start).all()
+    # 评测流量不计入运行健康度（计费仍保留评测消耗，属于真实成本）
+    runs = db.query(TraceRun).filter(
+        TraceRun.started_at >= start, func.coalesce(TraceRun.source, "") != "eval"
+    ).all()
     total = len(runs)
     errors = sum(1 for r in runs if r.status == "error")
     degraded = sum(1 for r in runs if r.status == "degraded")

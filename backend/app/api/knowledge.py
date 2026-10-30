@@ -162,7 +162,12 @@ async def upload_document(
     data = await file.read()
     if len(data) > MAX_FILE_MB * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"文件超过 {MAX_FILE_MB}MB 上限")
+    return store_document(db, kb_id, filename, file_type, data, auto_index=auto_index)
 
+
+def store_document(db: Session, kb_id: str, filename: str, file_type: str, data: bytes, auto_index: bool = True) -> Document:
+    """文件落盘 + 建文档记录 + 投递异步解析（上传与「补充知识」共用）"""
+    ext = os.path.splitext(filename)[1].lower()
     # 落盘
     kb_dir = os.path.join(settings.upload_dir, kb_id)
     os.makedirs(kb_dir, exist_ok=True)

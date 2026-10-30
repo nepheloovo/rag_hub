@@ -12,6 +12,7 @@
       <n-select v-model:value="filters.role" :options="roleOptions" placeholder="角色" clearable style="width: 130px" />
       <n-select v-model:value="filters.kb" :options="kbOptions" placeholder="知识库" clearable filterable style="width: 180px" />
       <n-select v-model:value="filters.status" :options="statusOptions" placeholder="状态" clearable style="width: 110px" />
+      <n-select v-model:value="filters.feedback" :options="feedbackOptions" placeholder="反馈" clearable style="width: 110px" />
       <n-input v-model:value="filters.q" placeholder="搜索问题 / 回答内容" clearable style="width: 220px" @keydown.enter="search" />
       <n-button type="primary" ghost @click="search">
         <template #icon><n-icon><SearchOutline /></n-icon></template>
@@ -70,7 +71,10 @@ const page = ref(1)
 const pageSize = ref(20)
 const kbOptions = ref<{ label: string; value: string }[]>([])
 const stats = ref<LogStats>({ today_count: 0, today_tokens: 0, avg_duration_ms: 0, success_rate: 100, trend: [] })
-const filters = reactive({ role: null as string | null, kb: null as string | null, status: null as string | null, q: '' })
+const filters = reactive({
+  role: null as string | null, kb: null as string | null, status: null as string | null,
+  feedback: null as 'like' | 'dislike' | 'any' | null, q: ''
+})
 
 const caseModal = ref(false)
 const activeLog = ref<LogItem | null>(null)
@@ -85,6 +89,11 @@ const roleOptions = [
 const statusOptions = [
   { label: '成功', value: 'success' },
   { label: '失败', value: 'error' }
+]
+const feedbackOptions = [
+  { label: '点踩', value: 'dislike' },
+  { label: '点赞', value: 'like' },
+  { label: '有反馈', value: 'any' }
 ]
 
 const metrics = computed(() => [
@@ -148,6 +157,12 @@ const columns: DataTableColumns<LogItem> = [
         { size: 'tiny', type: row.status === 'success' ? 'success' : 'error', bordered: false },
         { default: () => (row.status === 'success' ? '成功' : '失败') }
       )
+  },
+  {
+    title: '反馈',
+    key: 'feedback',
+    width: 60,
+    render: row => (row.feedback === -1 ? h('span', { title: '用户点踩' }, '👎') : row.feedback === 1 ? h('span', { title: '用户点赞' }, '👍') : '—')
   },
   {
     title: '操作',
@@ -216,6 +231,7 @@ async function load() {
         role: filters.role ?? undefined,
         kb_id: filters.kb ?? undefined,
         status: filters.status ?? undefined,
+        feedback: filters.feedback ?? undefined,
         q: filters.q || undefined,
         page: page.value,
         page_size: pageSize.value
@@ -239,6 +255,7 @@ function reset() {
   filters.role = null
   filters.kb = null
   filters.status = null
+  filters.feedback = null
   filters.q = ''
   search()
 }

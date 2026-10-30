@@ -200,7 +200,8 @@ const apps = ref<Application[]>([])
 const kbs = ref<KnowledgeBase[]>([])
 const stats = ref<StatsOverview>({
   month_app_calls: 0, month_new_docs: 0, month_new_apps: 0,
-  kb_count: 0, app_count: 0, published_count: 0
+  kb_count: 0, app_count: 0, published_count: 0,
+  satisfaction: null, like_count: 0, dislike_count: 0, hit_rate: null, miss_count: 0
 })
 const loading = ref(false)
 const filterCategory = ref<string | null>(null)

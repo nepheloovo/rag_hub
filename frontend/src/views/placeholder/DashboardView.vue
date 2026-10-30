@@ -3,7 +3,7 @@
     <div class="page-head">
       <div>
         <h2 class="page-title">看板</h2>
-        <p class="page-desc">业务运营数据总览（数据来自系统真实统计）</p>
+        <p class="page-desc">业务运营数据总览（数据来自系统真实统计，不含评测流量）</p>
       </div>
     </div>
 
@@ -20,7 +20,18 @@
       <n-card size="small">
         <n-statistic label="已发布应用" :value="`${stats.published_count} / ${stats.app_count}`" />
       </n-card>
+      <n-card size="small">
+        <n-statistic label="满意度（近 30 天）" :value="stats.satisfaction === null ? '—' : `${stats.satisfaction}%`" />
+        <div class="stat-sub">👍 {{ stats.like_count }} · 👎 {{ stats.dislike_count }}</div>
+      </n-card>
+      <n-card size="small">
+        <n-statistic label="知识命中率（近 30 天）" :value="stats.hit_rate === null ? '—' : `${stats.hit_rate}%`" />
+        <div class="stat-sub">未命中 {{ stats.miss_count }} 次</div>
+      </n-card>
     </div>
+
+    <KnowledgeGapPanel style="margin-top: 16px" @supplemented="load" />
+    <BadFeedbackPanel style="margin-top: 16px" />
 
     <n-card size="small" title="应用调用排行（近 7 天）" style="margin-top: 16px">
       <n-data-table
@@ -75,10 +86,13 @@ import { ref, computed, h, onMounted } from 'vue'
 import { NTag } from 'naive-ui'
 import { getStatsOverview, listApps } from '@/api'
 import type { Application, StatsOverview } from '@/api/types'
+import KnowledgeGapPanel from '@/components/insights/KnowledgeGapPanel.vue'
+import BadFeedbackPanel from '@/components/insights/BadFeedbackPanel.vue'
 
 const stats = ref<StatsOverview>({
   month_app_calls: 0, month_new_docs: 0, month_new_apps: 0,
-  kb_count: 0, app_count: 0, published_count: 0
+  kb_count: 0, app_count: 0, published_count: 0,
+  satisfaction: null, like_count: 0, dislike_count: 0, hit_rate: null, miss_count: 0
 })
 const rows = ref<Application[]>([])
 const loading = ref(false)
@@ -177,8 +191,14 @@ onMounted(load)
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 16px;
+}
+
+.stat-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #8f959e;
 }
 </style>
 

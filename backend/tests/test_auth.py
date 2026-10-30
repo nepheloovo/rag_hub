@@ -65,9 +65,9 @@ def test_audit_logs(client):
     logs = client.get("/api/audit?page_size=50").json()["items"]
     actions = {l["action"] for l in logs}
     assert "login" in actions
-    assert "user_create" in actions or "user_update" in actions
-    # 过滤
+    # 成员操作按动作过滤查询，避免被其他用例产生的较新审计记录挤出首页
     filtered = client.get("/api/audit?action=user").json()["items"]
+    assert {"user_create", "user_update"} & {l["action"] for l in filtered}
     assert all("user" in l["action"] for l in filtered)
 
 
