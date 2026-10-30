@@ -5,6 +5,7 @@ backend/.venv/
 backend/.python-runtime/
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # 运行时数据（上传文件/解析产物）
 backend/data/
@@ -20,3 +21,4 @@ backend/.env
 
 # 系统
 .DS_Store
+._*
