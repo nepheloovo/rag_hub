@@ -1,4 +1,7 @@
-"""检索服务：向量召回（pgvector 余弦）→ Rerank 精排（可降级）"""
+"""检索服务：语义（pgvector 余弦）/ 全文（关键词）/ 混合（RRF 融合）召回 → Rerank 精排（可降级）→ 阈值过滤"""
+import re
+import time
+
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -34,46 +37,219 @@ class RetrievalOutcome:
         self.rerank_tokens = rerank_tokens
 
 
-def retrieve(db: Session, kb_ids: list[str], query: str) -> RetrievalOutcome:
-    """kb_ids 支持多知识库联合召回"""
-    embed_service = get_embedding_service(db)
-    query_vec, embed_tokens = embed_service.embed_texts_with_usage([query])
-    query_vec = query_vec[0]
+def common_embedding_ref(db: Session, kb_ids: list[str]) -> str | None:
+    """多知识库共用的 embedding 引用：全部一致时返回该 ref，否则返回 None（全局默认）"""
+    from app.models import KnowledgeBase
 
     if not kb_ids:
+        return None
+    refs = {kb.embedding_ref or "" for kb in db.query(KnowledgeBase).filter(KnowledgeBase.id.in_(kb_ids)).all()}
+    ref = refs.pop() if len(refs) == 1 else ""
+    return ref or None
+
+
+RETRIEVAL_MODES = ("semantic", "fulltext", "hybrid")
+RRF_K = 60
+MAX_TERMS = 32
+
+
+def normalize_retrieval(options: dict | None) -> dict:
+    """应用 / 检索测试的检索参数归一化，空值回退全局默认"""
+    raw = options if isinstance(options, dict) else {}
+
+    def _num(key, default, low, high, cast=int):
+        try:
+            return max(low, min(high, cast(raw.get(key, default))))
+        except (TypeError, ValueError):
+            return default
+
+    top_k = _num("top_k", settings.retrieval_top_k, 1, 100)
+    return {
+        "mode": raw.get("mode") if raw.get("mode") in RETRIEVAL_MODES else "semantic",
+        "top_k": top_k,
+        "top_n": _num("top_n", settings.rerank_top_n, 1, top_k),
+        "score_threshold": _num("score_threshold", 0.0, 0.0, 1.0, float),
+        "rerank": raw.get("rerank", True) is not False,
+    }
+
+
+def query_terms(text_: str) -> list[str]:
+    """全文检索词：英文/编号词 + 汉字二元组（单字查询退化为单字）"""
+    lowered = (text_ or "").lower()
+    words = re.findall(r"[a-z0-9][a-z0-9_.-]*", lowered)
+    chinese = re.findall(r"[一-鿿]", lowered)
+    bigrams = ["".join(chinese[i:i + 2]) for i in range(len(chinese) - 1)] or chinese
+    seen: list[str] = []
+    for term in [*words, *bigrams]:
+        if term not in seen:
+            seen.append(term)
+    return seen[:MAX_TERMS]
+
+
+def _like(term: str) -> str:
+    return "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def _fulltext_search(db: Session, kb_ids: list[str], query: str, top_k: int) -> list[tuple]:
+    """关键词召回在数据库内完成：命中词占比 + 整句命中加分；检索字段含原文、标题、增强关键词与问题"""
+    terms = query_terms(query)
+    if not terms:
+        return []
+    haystack = (
+        "lower(content || ' ' || coalesce(metadata->>'heading', '') || ' ' "
+        "|| coalesce(metadata->>'keywords', '') || ' ' || coalesce(metadata->>'qa_pairs', ''))"
+    )
+    params: dict = {"kb_ids": kb_ids, "k": top_k, "exact": _like(query.lower().strip())}
+    hits = []
+    for i, term in enumerate(terms):
+        params[f"t{i}"] = _like(term)
+        hits.append(f"(CASE WHEN {haystack} LIKE :t{i} THEN 1 ELSE 0 END)")
+    score = f"LEAST(1.0, ({' + '.join(hits)})::float / {len(terms)} + (CASE WHEN {haystack} LIKE :exact THEN 0.25 ELSE 0 END))"
+    sql = f"""
+        SELECT id, doc_id, content, metadata, {score} AS s FROM chunks
+        WHERE kb_id = ANY(:kb_ids) AND ({' OR '.join(f"{haystack} LIKE :t{i}" for i in range(len(terms)))})
+        ORDER BY s DESC LIMIT :k
+    """
+    return [tuple(r) for r in db.execute(text(sql), params).fetchall()]
+
+
+def _rrf(vector_rows: list[tuple], keyword_rows: list[tuple], top_k: int) -> list[tuple]:
+    """Reciprocal Rank Fusion：按两路排名融合，分数归一化到 0-1"""
+    scores: dict[str, float] = {}
+    by_id: dict[str, tuple] = {}
+    for rows in (vector_rows, keyword_rows):
+        for rank, row in enumerate(rows, start=1):
+            scores[row[0]] = scores.get(row[0], 0.0) + 1.0 / (RRF_K + rank)
+            by_id.setdefault(row[0], row)
+    maximum = max(scores.values(), default=1.0)
+    fused = [(*by_id[cid][:4], scores[cid] / maximum) for cid in scores]
+    return sorted(fused, key=lambda r: r[4], reverse=True)[:top_k]
+
+
+def retrieve(
+    db: Session,
+    kb_ids: list[str],
+    query: str,
+    embedding_ref: str | None = None,
+    rec=None,
+    options: dict | None = None,
+) -> RetrievalOutcome:
+    """kb_ids 支持多知识库联合召回；embedding_ref 显式指定查询向量模型（与索引一致）
+    options: 检索参数（mode/top_k/top_n/score_threshold/rerank），见 normalize_retrieval
+    rec: 可选的 TraceRecorder，用于记录 embedding/召回/rerank 子步骤"""
+    opts = normalize_retrieval(options)
+    mode, top_k = opts["mode"], opts["top_k"]
+    embed_service = None
+    embed_tokens = 0
+    query_vec = None
+    if mode in ("semantic", "hybrid"):
+        embed_start = time.monotonic()
+        embed_service = get_embedding_service(db, embedding_ref)
+        query_vec, embed_tokens = embed_service.embed_texts_with_usage([query])
+        query_vec = query_vec[0]
+        embed_duration = int((time.monotonic() - embed_start) * 1000)
+
+        if rec:
+            usage = rec.usage_for(embed_service.model, embed_tokens, 0)
+            rec.add_usage("embedding", embed_service.model, embed_tokens, 0, usage=usage)
+            rec.record_span(
+                "retrieval.embed",
+                "查询向量化",
+                code_key="retrieval.embed",
+                input={"query": query, "embedding_ref": embedding_ref or "全局默认"},
+                output={
+                    "model": embed_service.model,
+                    "dim": len(query_vec),
+                    "fake": embed_service.is_fake,
+                    "tokens": embed_tokens,
+                },
+                duration_ms=embed_duration,
+                tokens=usage.as_dict(),
+                cost_cny=usage.cost,
+                status="success",
+            )
+    embedding_model = embed_service.model if embed_service else ""
+    embedding_is_fake = bool(embed_service and embed_service.is_fake)
+
+    if not kb_ids:
+        if rec:
+            rec.record_span(
+                "retrieval.search",
+                "知识召回（跳过）",
+                code_key="retrieval.search",
+                status="skipped",
+                input={"kb_ids": [], "query": query},
+                output={"reason": "应用未绑定知识库"},
+            )
         return RetrievalOutcome(
             chunks=[],
-            embedding_model=embed_service.model,
-            embedding_is_fake=embed_service.is_fake,
+            embedding_model=embedding_model,
+            embedding_is_fake=embedding_is_fake,
             embedding_tokens=embed_tokens,
         )
 
-    # 1. 向量召回 top-k（多库联合）
-    rows = db.execute(
-        text(
-            """
-            SELECT id, doc_id, content, metadata, 1 - (embedding <=> :q) AS sim
-            FROM chunks
-            WHERE kb_id = ANY(:kb_ids) AND embedding IS NOT NULL
-            ORDER BY embedding <=> :q
-            LIMIT :k
-            """
-        ),
-        {"q": str(query_vec), "kb_ids": kb_ids, "k": settings.retrieval_top_k},
-    ).fetchall()
+    # 1. 召回 top-k（多库联合）：语义 / 全文 / 混合
+    search_start = time.monotonic()
+    vector_rows: list[tuple] = []
+    keyword_rows: list[tuple] = []
+    if query_vec is not None:
+        vector_rows = [tuple(r) for r in db.execute(
+            text(
+                """
+                SELECT id, doc_id, content, metadata, 1 - (embedding <=> :q) AS sim
+                FROM chunks
+                WHERE kb_id = ANY(:kb_ids) AND embedding IS NOT NULL
+                ORDER BY embedding <=> :q
+                LIMIT :k
+                """
+            ),
+            {"q": str(query_vec), "kb_ids": kb_ids, "k": top_k},
+        ).fetchall()]
+    if mode in ("fulltext", "hybrid"):
+        keyword_rows = _fulltext_search(db, kb_ids, query, top_k)
+    rows = vector_rows if mode == "semantic" else keyword_rows if mode == "fulltext" else _rrf(vector_rows, keyword_rows, top_k)
+    search_duration = int((time.monotonic() - search_start) * 1000)
+    mode_label = {"semantic": "向量召回", "fulltext": "全文召回", "hybrid": "混合召回（RRF）"}[mode]
+    if rec:
+        candidates = [
+            {
+                "chunk_id": r[0],
+                "doc_id": r[1],
+                "score": round(float(r[4]), 4),
+                "source": (r[3] or {}).get("source", ""),
+                "page": (r[3] or {}).get("page", 0),
+                "content": (r[2] or "")[:300],
+            }
+            for r in rows
+        ]
+        rec.record_span(
+            "retrieval.search",
+            f"{mode_label} top-{top_k}",
+            code_key="retrieval.search",
+            input={"kb_ids": kb_ids, "mode": mode, "top_k": top_k, "query": query},
+            output={
+                "count": len(rows),
+                "vector_count": len(vector_rows),
+                "keyword_count": len(keyword_rows),
+                "candidates": candidates,
+            },
+            duration_ms=search_duration,
+            metadata={"kb_ids": kb_ids, "mode": mode},
+        )
 
-    # 2. Rerank 精排（失败/未配置自动降级）
+    # 2. Rerank 精排（失败/未配置自动降级；应用可关闭）
+    rerank_start = time.monotonic()
     rerank_model = ""
     rerank_used = False
     rerank_tokens = 0
     ranked_rows = []
     if rows:
-        rerank_service = RerankService.resolve(db)
+        rerank_service = RerankService.resolve(db) if opts["rerank"] else None
         if rerank_service:
             rerank_model = rerank_service.model
             documents = [r[1] for r in rows]
             try:
-                result = rerank_service.rerank(query, documents, settings.rerank_top_n)
+                result = rerank_service.rerank(query, documents, opts["top_n"])
                 rerank_used = True
                 rerank_tokens = result.total_tokens
                 ranked = sorted(result.ranked, key=lambda x: x["score"], reverse=True)
@@ -81,15 +257,74 @@ def retrieve(db: Session, kb_ids: list[str], query: str) -> RetrievalOutcome:
                     idx = item["index"]
                     if 0 <= idx < len(rows):
                         ranked_rows.append((rows[idx], item["score"]))
-            except Exception:  # noqa: BLE001 —— 任何异常降级为纯向量召回
+                if rec:
+                    usage = rec.usage_for(rerank_model, rerank_tokens, 0)
+                    rec.add_usage("rerank", rerank_model, rerank_tokens, 0, usage=usage)
+                    rec.record_span(
+                        "retrieval.rerank",
+                        f"Rerank 精排 top-{opts['top_n']}",
+                        code_key="retrieval.rerank",
+                        input={"model": rerank_model, "candidates": len(documents)},
+                        output={
+                            "kept": len(ranked_rows),
+                            "top": [
+                                {"index": item["index"], "score": round(float(item["score"]), 4)}
+                                for item in ranked[:5]
+                            ],
+                        },
+                        duration_ms=int((time.monotonic() - rerank_start) * 1000),
+                        tokens=usage.as_dict(),
+                        cost_cny=usage.cost,
+                    )
+            except Exception as exc:  # noqa: BLE001 —— 任何异常降级为纯向量召回
                 ranked_rows = [(r, r[4]) for r in rows]
+                if rec:
+                    rec.record_span(
+                        "retrieval.rerank",
+                        "Rerank 异常降级",
+                        code_key="retrieval.rerank",
+                        status="error",
+                        input={"model": rerank_model, "candidates": len(documents)},
+                        output={"fallback": "纯向量召回"},
+                        duration_ms=int((time.monotonic() - rerank_start) * 1000),
+                        error=str(exc),
+                    )
         if not rerank_service:
             ranked_rows = [(r, r[4]) for r in rows]
+            if rec:
+                rec.record_span(
+                    "retrieval.rerank",
+                    "Rerank 已降级",
+                    code_key="retrieval.rerank",
+                    status="skipped",
+                    input={"candidates": len(rows)},
+                    output={"reason": "应用关闭了结果重排" if not opts["rerank"] else "未配置可用的 rerank 模型"},
+                    duration_ms=int((time.monotonic() - rerank_start) * 1000),
+                )
 
+    # 3. 截断到引用上限并按最低相关度过滤；父子分块同一父块只保留最高分
     chunks = []
+    parent_groups = set()
+    seen_groups = set()
+    kept_rows = []
     for row, score in ranked_rows:
+        meta = row[3] or {}
+        group_key = (row[1], meta.get("parent_group")) if meta.get("kind") == "child" and meta.get("parent_group") else None
+        if group_key and group_key in seen_groups:
+            continue
+        if opts["score_threshold"] > 0 and float(score) < opts["score_threshold"]:
+            continue
+        if group_key:
+            seen_groups.add(group_key)
+        kept_rows.append((row, score))
+        if len(kept_rows) >= opts["top_n"]:
+            break
+    for row, score in kept_rows:
         chunk_id, doc_id, content, metadata, _sim = row
         meta = metadata or {}
+        group = meta.get("parent_group")
+        if meta.get("kind") == "child" and group:
+            parent_groups.add((doc_id, group))
         chunks.append(
             RetrievedChunk(
                 chunk=Chunk(id=chunk_id, doc_id=doc_id, content=content, metadata_=meta),
@@ -97,10 +332,30 @@ def retrieve(db: Session, kb_ids: list[str], query: str) -> RetrievalOutcome:
             )
         )
 
+    # 父子分块展开：child 命中时返回所在 parent 的完整内容
+    if parent_groups:
+        from sqlalchemy import text as _text
+
+        parents: dict[tuple, str] = {}
+        for doc_id, group in parent_groups:
+            row = db.execute(
+                _text(
+                    "SELECT content FROM chunks "
+                    "WHERE doc_id = :doc_id AND metadata->>'parent_group' = :g AND metadata->>'kind' = 'parent' LIMIT 1"
+                ),
+                {"doc_id": doc_id, "g": group},
+            ).first()
+            if row:
+                parents[(doc_id, group)] = row[0]
+        for item in chunks:
+            group = (item.chunk.metadata_ or {}).get("parent_group")
+            if (item.chunk.metadata_ or {}).get("kind") == "child" and (item.chunk.doc_id, group) in parents:
+                item.chunk.content = parents[(item.chunk.doc_id, group)]
+
     return RetrievalOutcome(
         chunks=chunks,
-        embedding_model=embed_service.model,
-        embedding_is_fake=embed_service.is_fake,
+        embedding_model=embedding_model,
+        embedding_is_fake=embedding_is_fake,
         rerank_model=rerank_model if rerank_used else "",
         rerank_used=rerank_used,
         embedding_tokens=embed_tokens,

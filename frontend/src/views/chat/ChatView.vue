@@ -98,7 +98,15 @@
             <div v-if="m.role === 'assistant' && m.meta && !m.streaming" class="msg-meta">
               耗时 {{ (m.meta.durationMs / 1000).toFixed(1) }}s · {{ m.meta.tokens.toLocaleString() }} tokens
               <span v-if="m.meta.fake"> · 模拟模型（未配置服务商）</span>
+              <n-button v-if="m.meta.traceId" text size="tiny" type="primary" class="trace-link" @click="openTrace(m.meta.traceId)">
+                查看调用链路 →
+              </n-button>
             </div>
+            <MessageFeedback
+              v-if="m.role === 'assistant' && m.messageId && !m.streaming"
+              v-model:rating="m.feedback"
+              :message-id="m.messageId"
+            />
           </div>
           <div v-if="m.role === 'user'" class="avatar me">我</div>
         </div>
@@ -136,6 +144,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
+import { useRouter } from 'vue-router'
 import {
   AddOutline,
   ChatbubblesOutline,
@@ -144,8 +153,9 @@ import {
   SendOutline
 } from '@vicons/ionicons5'
 import { listConversations, listKbs, getMessages, streamChat, listProviders, getDefaults } from '@/api'
-import type { ChatMessage, Conversation, KnowledgeBase, Provider, RefItem } from '@/api/types'
-import { useAppStore } from '@/stores/app'
+import type { ChatDoneData, Conversation, FeedbackRating, KnowledgeBase, RefItem } from '@/api/types'
+import { useAuthStore } from '@/stores/auth'
+import MessageFeedback from '@/components/chat/MessageFeedback.vue'
 
 interface Msg {
   id: string
@@ -153,11 +163,14 @@ interface Msg {
   content: string
   streaming?: boolean
   refs?: RefItem[]
-  meta?: { durationMs: number; tokens: number; fake: boolean }
+  messageId?: string
+  feedback?: FeedbackRating
+  meta?: { durationMs: number; tokens: number; fake: boolean; traceId?: string }
 }
 
 const message = useMessage()
-const store = useAppStore()
+const router = useRouter()
+const auth = useAuthStore()
 const scrollRef = ref<any>(null)
 const kbs = ref<KnowledgeBase[]>([])
 const selectedKb = ref<string | null>(null)
@@ -248,13 +261,19 @@ async function openConversation(convId: string) {
       id: m.id,
       role: m.role,
       content: m.content,
-      refs: m.role === 'assistant' ? m.refs : undefined
+      refs: m.role === 'assistant' ? m.refs : undefined,
+      messageId: m.role === 'assistant' ? m.id : undefined,
+      feedback: m.feedback ?? 0
     }))
     activeConvId.value = convId
     scrollToBottom()
   } catch (e: any) {
     message.error(e.message)
   }
+}
+
+function openTrace(traceId: string) {
+  router.push(`/app/observability/traces/${traceId}`)
 }
 
 function onKeydown(e: KeyboardEvent) {
@@ -284,7 +303,7 @@ async function send(text?: string) {
     for await (const { event, data } of streamChat({
       kb_id: selectedKb.value,
       query: content,
-      role: store.role ?? 'user',
+      role: auth.role ?? 'business_user',
       conversation_id: activeConvId.value
     })) {
       if (event === 'delta') {
@@ -292,14 +311,17 @@ async function send(text?: string) {
         aiMsg.content += d.text
         scrollToBottom()
       } else if (event === 'done') {
-        const d = data as any
+        const d = data as ChatDoneData
         aiMsg.content = d.answer
         aiMsg.streaming = false
         aiMsg.refs = d.refs
+        aiMsg.messageId = d.message_id
+        aiMsg.feedback = 0
         aiMsg.meta = {
           durationMs: d.duration_ms,
           tokens: d.tokens?.total ?? 0,
-          fake: !!d.models?.fake
+          fake: !!d.models?.fake,
+          traceId: d.trace_id
         }
         if (!activeConvId.value && d.conversation_id) {
           activeConvId.value = d.conversation_id
@@ -317,6 +339,7 @@ async function send(text?: string) {
     if (!aiMsg.content) aiMsg.content = `⚠️ ${e.message}`
     message.error(e.message)
   } finally {
+    aiMsg.streaming = false
     sending.value = false
     scrollToBottom()
   }
@@ -623,6 +646,11 @@ onMounted(async () => {
   overflow: hidden;
 }
 
+
+.trace-link {
+  margin-left: 8px;
+  font-size: 11px;
+}
 .msg-meta {
   margin-top: 6px;
   font-size: 11px;

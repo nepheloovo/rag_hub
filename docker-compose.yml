@@ -1,5 +1,7 @@
-# 企业知识库中台 1.0 —— 完整部署编排
+# 知枢 · AI 应用中台 —— 完整部署编排
 # 一键启动：docker compose up -d --build
+# 项目名固定，保证迁移目录后仍复用原数据卷
+name: rag_zhongtai
 services:
   postgres:
     image: pgvector/pgvector:pg16

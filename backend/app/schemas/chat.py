@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
@@ -13,6 +13,11 @@ class ChatRequest(BaseModel):
 class ConversationCreate(BaseModel):
     kb_id: str
     title: Optional[str] = None
+
+
+class FeedbackRequest(BaseModel):
+    rating: Literal[1, -1, 0]
+    comment: Optional[str] = None
 
 
 class RefItem(BaseModel):

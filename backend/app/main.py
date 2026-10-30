@@ -1,21 +1,92 @@
 """FastAPI 应用入口"""
+import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
-from app.api import apps, chat, health, knowledge, logs, providers
+from app.api import (
+    apps,
+    audit,
+    auth,
+    chat,
+    eval as eval_api,
+    health,
+    knowledge,
+    logs,
+    observability,
+    providers,
+    public,
+    sso,
+    stats,
+    tools,
+    users,
+)
+from app.api.deps import get_current_user, require_roles
 from app.config import settings
 from app.database import Base, SessionLocal, engine
+from app.models import User
+from app.services.auth import hash_password
+from app.services.app_release import migrate_app_releases
+from app.services.observability import seed_prices
 from app.services.provider_service import seed_presets
+from app.services.tools import seed_system_tools
+
+DEFAULT_ADMIN = ("admin", "admin123")
+
+
+def seed_admin(db) -> None:
+    username, password = DEFAULT_ADMIN
+    if not db.query(User).filter(User.username == username).first():
+        db.add(
+            User(
+                id=uuid.uuid4().hex,
+                username=username,
+                display_name="系统管理员",
+                department="平台",
+                role="platform_admin",
+                password_hash=hash_password(password),
+            )
+        )
+        db.commit()
+
+
+def ensure_schema() -> None:
+    """开发期轻量迁移：新表由 create_all 创建，旧表补列保持兼容"""
+    with engine.begin() as conn:
+        conn.execute(
+            text("ALTER TABLE chat_logs ADD COLUMN IF NOT EXISTS trace_id VARCHAR(32) DEFAULT ''")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_chat_logs_trace_id ON chat_logs (trace_id)")
+        )
+        # 新表交给 create_all；已存在的表显式补列，支持直接升级旧数据库。
+        for statement in (
+            "ALTER TABLE applications ADD COLUMN IF NOT EXISTS published_version_id VARCHAR(32)",
+            "ALTER TABLE eval_cases ADD COLUMN IF NOT EXISTS expected_keywords JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE eval_cases ADD COLUMN IF NOT EXISTS forbidden_keywords JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE eval_cases ADD COLUMN IF NOT EXISTS require_citations BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE eval_sets ADD COLUMN IF NOT EXISTS app_id VARCHAR(32) NOT NULL DEFAULT ''",
+            "ALTER TABLE eval_sets ADD COLUMN IF NOT EXISTS is_release_gate BOOLEAN NOT NULL DEFAULT FALSE",
+            "CREATE INDEX IF NOT EXISTS ix_eval_sets_app_id ON eval_sets (app_id)",
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS chunk_config JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE applications ADD COLUMN IF NOT EXISTS retrieval JSONB NOT NULL DEFAULT '{}'::jsonb",
+        ):
+            conn.execute(text(statement))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 开发期直接建表（后续接入 Alembic 迁移）
     Base.metadata.create_all(bind=engine)
+    ensure_schema()
     with SessionLocal() as db:
+        migrate_app_releases(db)
         seed_presets(db)
+        seed_system_tools(db)
+        seed_admin(db)
+        seed_prices(db)
     yield
 
 
@@ -29,10 +100,62 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 公开与认证接口
 app.include_router(health.router, prefix=settings.api_prefix)
-app.include_router(providers.router, prefix=settings.api_prefix)
-app.include_router(knowledge.kb_router, prefix=settings.api_prefix)
-app.include_router(knowledge.doc_router, prefix=settings.api_prefix)
-app.include_router(chat.router, prefix=settings.api_prefix)
-app.include_router(apps.router, prefix=settings.api_prefix)
-app.include_router(logs.router, prefix=settings.api_prefix)
+app.include_router(auth.router, prefix=settings.api_prefix)
+app.include_router(public.router, prefix=settings.api_prefix)
+
+# 登录后可用
+app.include_router(
+    chat.router, prefix=settings.api_prefix, dependencies=[Depends(get_current_user)]
+)
+app.include_router(
+    apps.router, prefix=settings.api_prefix, dependencies=[Depends(get_current_user)]
+)
+app.include_router(
+    knowledge.kb_router, prefix=settings.api_prefix, dependencies=[Depends(get_current_user)]
+)
+app.include_router(
+    knowledge.doc_router, prefix=settings.api_prefix, dependencies=[Depends(get_current_user)]
+)
+app.include_router(
+    knowledge.chunk_router, prefix=settings.api_prefix, dependencies=[Depends(get_current_user)]
+)
+app.include_router(
+    tools.router, prefix=settings.api_prefix, dependencies=[Depends(get_current_user)]
+)
+app.include_router(
+    stats.router, prefix=settings.api_prefix, dependencies=[Depends(get_current_user)]
+)
+app.include_router(
+    logs.router,
+    prefix=settings.api_prefix,
+    dependencies=[Depends(require_roles("platform_admin"))],
+)
+app.include_router(
+    observability.router,
+    prefix=settings.api_prefix,
+    dependencies=[Depends(require_roles("platform_admin", "app_developer", "kb_admin"))],
+)
+app.include_router(
+    eval_api.router,
+    prefix=settings.api_prefix,
+    dependencies=[Depends(require_roles("platform_admin", "app_developer", "kb_admin"))],
+)
+app.include_router(
+    providers.router,
+    prefix=settings.api_prefix,
+    dependencies=[Depends(require_roles("platform_admin"))],
+)
+app.include_router(
+    users.router, prefix=settings.api_prefix, dependencies=[Depends(get_current_user)]
+)
+app.include_router(
+    audit.router, prefix=settings.api_prefix, dependencies=[Depends(get_current_user)]
+)
+
+app.include_router(
+    sso.router,
+    prefix=settings.api_prefix,
+    dependencies=[Depends(require_roles("platform_admin"))],
+)

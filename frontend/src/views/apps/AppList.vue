@@ -3,12 +3,42 @@
     <div class="page-head">
       <div>
         <h2 class="page-title">应用</h2>
-        <p class="page-desc">基于知识库构建的应用：问答应用 · 智能客服 · 报告分析</p>
+        <p class="page-desc">搭建、调试和发布 AI 应用。发布后出现在业务人员的工作台。</p>
       </div>
       <n-button v-if="canManage" type="primary" @click="showCreate = true">
         <template #icon><n-icon><AddOutline /></n-icon></template>
         新建应用
       </n-button>
+    </div>
+
+    <!-- 筛选 -->
+    <div class="filter-row">
+      <n-tag
+        :type="filterKind === null ? 'primary' : 'default'"
+        :bordered="false"
+        round
+        clickable
+        @click="filterKind = null"
+      >全部</n-tag>
+      <n-tag
+        v-for="k in kindList"
+        :key="k.value"
+        :type="filterKind === k.value ? 'primary' : 'default'"
+        :bordered="false"
+        round
+        clickable
+        @click="filterKind = k.value"
+      >{{ k.label }}</n-tag>
+      <n-divider vertical />
+      <n-tag
+        v-for="c in categoryList"
+        :key="c"
+        :type="filterCategory === c ? 'primary' : 'default'"
+        :bordered="false"
+        round
+        clickable
+        @click="filterCategory = filterCategory === c ? null : c"
+      >{{ c }}</n-tag>
     </div>
 
     <n-spin :show="loading">
@@ -22,33 +52,32 @@
 
       <div class="app-grid">
         <n-card
-          v-for="app in apps"
+          v-for="app in filteredApps"
           :key="app.id"
           class="app-card"
           hoverable
           @click="$router.push(`/app/apps/${app.id}`)"
         >
           <div class="app-head">
-            <div class="app-icon" :style="{ background: typeMeta[app.app_type]?.bg }">
-              <n-icon size="22" :color="typeMeta[app.app_type]?.color">
-                <component :is="typeMeta[app.app_type]?.icon" />
+            <div class="app-icon" :style="{ background: kindMeta[app.app_kind]?.bg }">
+              <n-icon size="22" :color="kindMeta[app.app_kind]?.color">
+                <component :is="kindMeta[app.app_kind]?.icon" />
               </n-icon>
             </div>
             <div class="app-info">
               <div class="app-name-row">
                 <span class="app-name">{{ app.name }}</span>
-                <n-tag size="small" :bordered="false" :color="{ color: typeMeta[app.app_type]?.bg, textColor: typeMeta[app.app_type]?.color }">
-                  {{ typeMeta[app.app_type]?.label }}
+                <n-tag size="small" :bordered="false" :color="{ color: kindMeta[app.app_kind]?.bg, textColor: kindMeta[app.app_kind]?.color }">
+                  {{ kindMeta[app.app_kind]?.label }}
                 </n-tag>
               </div>
-              <div class="app-time">更新于 {{ formatTime(app.updated_at) }}</div>
+              <div class="app-time">{{ statusLabel(app.status) }}<template v-if="app.published_version != null"> · v{{ app.published_version }}</template> · {{ app.category }}</div>
             </div>
           </div>
           <div class="app-desc">{{ app.description || '暂无描述' }}</div>
           <div class="app-foot">
             <span class="app-kb">
-              <n-icon size="14"><FolderOpenOutline /></n-icon>
-              绑定 {{ app.kb_ids?.length || 0 }} 个知识库
+              近 7 天 {{ app.call_count_7d }} 次调用 · 绑定 {{ app.kb_ids?.length || 0 }} 个知识库
             </span>
             <n-button
               v-if="canManage"
@@ -88,6 +117,19 @@
         <n-form-item label="描述">
           <n-input v-model:value="form.description" placeholder="应用用途说明（可选）" />
         </n-form-item>
+        <n-form-item label="应用形态">
+          <n-select
+            v-model:value="form.app_kind"
+            :options="[
+              { label: '简易（提示词 + 知识库 + 表单）', value: 'simple' },
+              { label: 'Chat Flow（可视化编排）', value: 'chatflow' },
+              { label: 'Agent（自主规划工具）', value: 'agent' }
+            ]"
+          />
+        </n-form-item>
+        <n-form-item label="业务分类">
+          <n-select v-model:value="form.category" :options="categoryList.map(c => ({ label: c, value: c }))" />
+        </n-form-item>
         <n-form-item label="知识库" required>
           <n-select
             v-model:value="form.kb_ids"
@@ -126,11 +168,11 @@ import {
 } from '@vicons/ionicons5'
 import { createApp as apiCreateApp, deleteApp, listApps, listKbs } from '@/api'
 import type { Application, KnowledgeBase } from '@/api/types'
-import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 
 const message = useMessage()
 const dialog = useDialog()
-const store = useAppStore()
+const auth = useAuthStore()
 
 const apps = ref<Application[]>([])
 const kbs = ref<KnowledgeBase[]>([])
@@ -138,7 +180,13 @@ const loading = ref(false)
 const showCreate = ref(false)
 const creating = ref(false)
 
-const canManage = computed(() => store.role === 'admin' || store.role === 'manager')
+const canManage = computed(() => ['platform_admin', 'app_developer', 'kb_admin'].includes(auth.role!))
+
+const kindMeta: Record<string, { label: string; color: string; bg: string; icon: any }> = {
+  simple: { label: '简易', color: '#3370ff', bg: '#eef3ff', icon: markRaw(ChatbubblesOutline) },
+  chatflow: { label: 'Chat Flow', color: '#8b5cf6', bg: '#f3efff', icon: markRaw(DocumentTextOutline) },
+  agent: { label: 'Agent', color: '#0ea5e9', bg: '#e8f7ff', icon: markRaw(HeadsetOutline) }
+}
 
 const typeMeta: Record<string, { label: string; color: string; bg: string; icon: any; desc: string }> = {
   qa: {
@@ -168,9 +216,36 @@ const typeList = computed(() =>
   Object.entries(typeMeta).map(([key, v]) => ({ key, ...v }))
 )
 
+const kindList = [
+  { label: '简易', value: 'simple' },
+  { label: 'Chat Flow', value: 'chatflow' },
+  { label: 'Agent', value: 'agent' }
+]
+const categoryList = ['报告撰写', '智能客服', '制度与合同审校', '营销内容', '办公提效']
+
+const filterKind = ref<string | null>(null)
+const filterCategory = ref<string | null>(null)
+
+const filteredApps = computed(() =>
+  apps.value.filter(a => {
+    if (filterKind.value && a.app_kind !== filterKind.value) return false
+    if (filterCategory.value && a.category !== filterCategory.value) return false
+    return true
+  })
+)
+
+const statusLabel = (s: string) => ({ draft: '草稿', offline: '已下线', published: '已发布' } as Record<string, string>)[s] || s
+
 const kbOptions = computed(() => kbs.value.map(k => ({ label: k.name, value: k.id })))
 
-const form = reactive({ name: '', description: '', app_type: 'qa', kb_ids: [] as string[] })
+const form = reactive({
+  name: '',
+  description: '',
+  app_type: 'qa',
+  app_kind: 'simple',
+  category: '办公提效',
+  kb_ids: [] as string[]
+})
 
 function formatTime(iso: string) {
   const d = new Date(iso)
@@ -198,13 +273,15 @@ async function createApp() {
       name: form.name.trim(),
       description: form.description.trim(),
       app_type: form.app_type,
+      app_kind: form.app_kind,
+      category: form.category,
       kb_ids: form.kb_ids
     })
     showCreate.value = false
     form.name = ''
     form.description = ''
     form.kb_ids = []
-    message.success('应用创建成功')
+    message.success('应用创建成功（草稿状态）')
     await load()
   } catch (e: any) {
     message.error(e.message)

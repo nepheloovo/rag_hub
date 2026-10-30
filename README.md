@@ -14,6 +14,8 @@
 | 模型配置 | OpenRouter / AIHubmix / 通义 三服务商，各自配置 Embedding / Rerank / LLM 模型，全局默认模型，连通性测试 |
 | OCR | 通义 qwen-vl 多模态（云端 API，无需本地模型） |
 | 日志监测 | 对话查询内容、Token 消耗（分 embedding/rerank/llm）、使用时长、成功率、7 日趋势 |
+| **可观测中心** | 一次调用一条 Trace：Agent ReAct 全量留痕（Plan/Thought/Action/Tool/Skill/Observation/Final）、工具与 Skill 状态、单步 Token/成本、完整上下文、Harness 异常；知识库构建四阶段、对话日志、计费消耗（按模型/应用/用途、单价可配）；节点可展开内部运行代码 + 逐段中文解释 |
+| **评测集** | 线上 Case 回流（链路/日志一键 Good/Bad、手工录入）、Case 池筛选与批量归集、评测集创建/添加/移出、good/bad 分布、JSONL 导出 |
 
 ## 架构
 
@@ -89,7 +91,7 @@ cd frontend
 npm install && npm run dev   # http://localhost:5173
 
 # 测试（使用独立测试库 rag_zhongtai_test）
-cd backend && .venv/bin/python -m pytest tests/ -v   # 17 用例
+cd backend && .venv/bin/python -m pytest tests/ -v   # 55 用例
 ```
 
 ## 目录结构
@@ -103,12 +105,20 @@ rag_zhongtai/
 │   │   ├── models/         # SQLAlchemy 模型（含 pgvector）
 │   │   ├── services/       # parsing(5 种解析器+OCR) / retrieval / rerank / chat / embedding
 │   │   └── worker/         # Celery 解析任务
-│   └── tests/              # pytest 17 用例
+│   └── tests/              # pytest 55 用例
 └── frontend/               # Vue 3 + Naive UI
     └── src/
         ├── api/            # 接口层（SSE 解析 / 上传进度）
         └── views/          # 角色选择 / 对话 / 知识库 / 模型配置 / 日志
 ```
+
+## 可观测与评测集
+
+- 设计文档：`docs/可观测与评测集设计.md`
+- 数据模型：`trace_runs` / `trace_spans` / `model_prices` / `eval_cases` / `eval_sets` / `eval_set_items`
+- 页面：`/app/observability`（总览 / 调用链 / 对话日志 / 计费消耗 / 知识库构建）、`/app/observability/traces/:id`、`/app/eval`、`/app/eval/:id`
+- 旧库兼容：启动时自动执行 `ALTER TABLE chat_logs ADD COLUMN IF NOT EXISTS trace_id`，历史日志无 Trace 仍可手工回流 Case
+- 首次体验可在观测页点击「载入演示数据」，会写入 6 条链路、5 条 Case、2 个评测集（均可重复点击，不会重复写入）
 
 ## 已知限制（1.0）
 

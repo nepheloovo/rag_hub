@@ -1,7 +1,7 @@
 """对话与日志"""
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -12,8 +12,9 @@ class Conversation(Base):
     __tablename__ = "conversations"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    kb_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True
+    # 应用会话可能未绑定知识库（Chat Flow 应用），故可空
+    kb_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True, nullable=True
     )
     # 应用会话：绑定应用（应用级对话时使用，kb_id 存第一个绑定的知识库）
     app_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
@@ -34,6 +35,26 @@ class Message(Base):
     # 引用来源 [{doc, page, snippet}]
     refs: Mapped[list] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MessageFeedback(Base):
+    """同一用户对同一条回答只保留当前评分，取消时删除记录。"""
+
+    __tablename__ = "message_feedback"
+    __table_args__ = (UniqueConstraint("message_id", "user_id", name="uq_message_feedback_user"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    message_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("messages.id", ondelete="CASCADE"), index=True
+    )
+    # 公开访客统一记为 visitor；登录用户使用稳定的用户 ID。
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    comment: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class ChatLog(Base):
@@ -58,3 +79,4 @@ class ChatLog(Base):
     tokens: Mapped[dict] = mapped_column(JSONB, default=dict)
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(16), default="success")  # success / error
+    trace_id: Mapped[str] = mapped_column(String(32), default="", index=True)

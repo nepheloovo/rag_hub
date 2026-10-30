@@ -7,6 +7,12 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import ChatLog
+from app.models.chat import MessageFeedback
+from app.models.observability import TraceRun
+from app.services.insights import EVAL_ROLE, trace_feedback
+
+# 评测流量（role=eval）默认不计入日志与统计
+NOT_EVAL = func.coalesce(ChatLog.role, "") != EVAL_ROLE
 
 router = APIRouter(prefix="/logs", tags=["日志监测"])
 
@@ -17,6 +23,7 @@ def list_logs(
     kb_id: str | None = None,
     status: str | None = None,
     q: str | None = None,
+    feedback: str | None = Query(None, pattern="^(like|dislike|any)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -24,6 +31,17 @@ def list_logs(
     query = db.query(ChatLog)
     if role:
         query = query.filter(ChatLog.role == role)
+    else:
+        query = query.filter(NOT_EVAL)
+    if feedback:
+        rated = db.query(TraceRun.id).join(MessageFeedback, MessageFeedback.message_id == TraceRun.message_id)
+        if feedback == "like":
+            # 点赞且没有点踩
+            disliked = rated.filter(MessageFeedback.rating < 0)
+            rated = rated.filter(MessageFeedback.rating > 0, ~TraceRun.id.in_(disliked))
+        elif feedback == "dislike":
+            rated = rated.filter(MessageFeedback.rating < 0)
+        query = query.filter(ChatLog.trace_id.in_(rated))
     if kb_id:
         query = query.filter(ChatLog.kb_id == kb_id)
     if status:
@@ -37,13 +55,18 @@ def list_logs(
         .limit(page_size)
         .all()
     )
-    return {"total": total, "page": page, "page_size": page_size, "items": rows}
+    ratings = trace_feedback(db, [r.trace_id for r in rows])
+    items = [
+        {**{c.key: getattr(r, c.key) for c in ChatLog.__mapper__.column_attrs}, "feedback": ratings.get(r.trace_id, 0)}
+        for r in rows
+    ]
+    return {"total": total, "page": page, "page_size": page_size, "items": items}
 
 
 @router.get("/stats")
 def log_stats(db: Session = Depends(get_db)):
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    base = db.query(ChatLog).filter(ChatLog.time >= today_start)
+    base = db.query(ChatLog).filter(ChatLog.time >= today_start, NOT_EVAL)
     total = base.count()
     success = base.filter(ChatLog.status == "success").count()
 
@@ -51,9 +74,9 @@ def log_stats(db: Session = Depends(get_db)):
         func.coalesce(
             func.sum(func.jsonb_extract_path_text(ChatLog.tokens, "total").cast(Integer)), 0
         )
-    ).filter(ChatLog.time >= today_start).scalar()
+    ).filter(ChatLog.time >= today_start, NOT_EVAL).scalar()
 
-    avg_ms = db.query(func.avg(ChatLog.duration_ms)).filter(ChatLog.time >= today_start).scalar() or 0
+    avg_ms = db.query(func.avg(ChatLog.duration_ms)).filter(ChatLog.time >= today_start, NOT_EVAL).scalar() or 0
 
     # 近 7 日趋势
     trend = []
@@ -62,7 +85,7 @@ def log_stats(db: Session = Depends(get_db)):
         day_count = (
             db.query(func.count(ChatLog.id))
             .filter(ChatLog.time >= datetime.combine(day, datetime.min.time()))
-            .filter(ChatLog.time < datetime.combine(day, datetime.min.time()) + timedelta(days=1))
+            .filter(ChatLog.time < datetime.combine(day, datetime.min.time()) + timedelta(days=1), NOT_EVAL)
             .scalar()
         )
         trend.append({"date": str(day), "count": day_count})
