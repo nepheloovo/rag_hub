@@ -14,6 +14,15 @@ import type {
   LogItem,
   LogStats,
   ModelDefaults,
+  ObsOverview,
+  TraceRun,
+  TraceDetail,
+  BillingData,
+  ModelPrice,
+  EvalCase,
+  EvalSetSummary,
+  EvalSetDetail,
+  EvalOverview,
   Provider,
   RetrievalChunk,
   StatsOverview,
@@ -157,3 +166,123 @@ export const listAudit = (params: { action?: string; actor?: string; page?: numb
   })
   return api<{ total: number; items: any[] }>(`/audit?${qs.toString()}`)
 }
+
+
+// ---------- 可观测 ----------
+export const getObsOverview = (days = 7) =>
+  api<ObsOverview>(`/observability/overview?days=${days}`)
+
+export const listTraces = (params: {
+  trace_type?: string
+  status?: string
+  app_id?: string
+  kb_id?: string
+  source?: string
+  q?: string
+  page?: number
+  page_size?: number
+}) => {
+  const qs = new URLSearchParams()
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== '') qs.set(k, String(v))
+  })
+  return api<{ total: number; page: number; page_size: number; items: TraceRun[] }>(
+    `/observability/traces?${qs.toString()}`
+  )
+}
+
+export const getTrace = (id: string) => api<TraceDetail>(`/observability/traces/${id}`)
+
+export const listBuilds = (params: { kb_id?: string; status?: string; page?: number; page_size?: number }) => {
+  const qs = new URLSearchParams()
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== '') qs.set(k, String(v))
+  })
+  return api<{ total: number; page: number; page_size: number; items: TraceRun[] }>(
+    `/observability/builds?${qs.toString()}`
+  )
+}
+
+export const getBilling = (days = 14) => api<BillingData>(`/observability/billing?days=${days}`)
+
+export const listPrices = () => api<ModelPrice[]>('/observability/prices')
+export const updatePrice = (model: string, data: { input_price: number; output_price: number }) =>
+  api(`/observability/prices/${encodeURIComponent(model)}`, {
+    method: 'PUT',
+    body: JSON.stringify(data)
+  })
+
+export const traceToCase = (
+  traceId: string,
+  data: { label: 'good' | 'bad'; note?: string; tags?: string[]; reference_answer?: string; set_id?: string }
+) =>
+  api<{ case_id: string; label: string; added_to_set: boolean }>(
+    `/observability/traces/${traceId}/to-case`,
+    { method: 'POST', body: JSON.stringify(data) }
+  )
+
+export const loadDemoObservability = () =>
+  api<{ created: boolean; message: string; traces?: number; cases?: number; sets?: number }>(
+    '/observability/demo',
+    { method: 'POST' }
+  )
+
+// ---------- 评测集 ----------
+export const getEvalOverview = () => api<EvalOverview>('/eval/overview')
+
+export const listCases = (params: {
+  label?: string
+  status?: string
+  source?: string
+  app_id?: string
+  q?: string
+  page?: number
+  page_size?: number
+}) => {
+  const qs = new URLSearchParams()
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== '') qs.set(k, String(v))
+  })
+  return api<{ total: number; page: number; page_size: number; items: EvalCase[] }>(
+    `/eval/cases?${qs.toString()}`
+  )
+}
+
+export const createCase = (data: {
+  trace_id?: string
+  question?: string
+  answer?: string
+  reference_answer?: string
+  contexts?: any[]
+  label?: string
+  status?: string
+  app_id?: string
+  app_name?: string
+  source?: string
+  tags?: string[]
+  note?: string
+  set_id?: string
+}) => api<{ case: EvalCase; created: boolean; added_to_set: boolean }>('/eval/cases', {
+  method: 'POST',
+  body: JSON.stringify(data)
+})
+
+export const updateCase = (id: string, data: Record<string, any>) =>
+  api<EvalCase>(`/eval/cases/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
+
+export const deleteCase = (id: string) => api(`/eval/cases/${id}`, { method: 'DELETE' })
+
+export const listEvalSets = () => api<EvalSetSummary[]>('/eval/sets')
+export const createEvalSet = (data: { name: string; description?: string; case_ids?: string[] }) =>
+  api<EvalSetSummary>('/eval/sets', { method: 'POST', body: JSON.stringify(data) })
+export const getEvalSet = (id: string) => api<EvalSetDetail>(`/eval/sets/${id}`)
+export const updateEvalSet = (id: string, data: { name?: string; description?: string }) =>
+  api<EvalSetSummary>(`/eval/sets/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
+export const deleteEvalSet = (id: string) => api(`/eval/sets/${id}`, { method: 'DELETE' })
+export const addCasesToSet = (setId: string, caseIds: string[]) =>
+  api<{ added: number; set: EvalSetSummary }>(`/eval/sets/${setId}/cases`, {
+    method: 'POST',
+    body: JSON.stringify({ case_ids: caseIds })
+  })
+export const removeCaseFromSet = (setId: string, caseId: string) =>
+  api(`/eval/sets/${setId}/cases/${caseId}`, { method: 'DELETE' })

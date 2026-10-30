@@ -49,7 +49,7 @@ def public_chat(app_id: str, req: AppChatRequest, db: Session = Depends(get_db))
         if used >= app.visitor_daily_limit:
             raise HTTPException(status_code=429, detail="该应用今日访客对话次数已达上限")
     req.role = "访客"
-    return app_chat_response(app_id, req)
+    return app_chat_response(app_id, req, source="public")
 
 
 @router.get("/{app_id}/visitor-stats")

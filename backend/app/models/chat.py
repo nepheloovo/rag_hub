@@ -59,3 +59,4 @@ class ChatLog(Base):
     tokens: Mapped[dict] = mapped_column(JSONB, default=dict)
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(16), default="success")  # success / error
+    trace_id: Mapped[str] = mapped_column(String(32), default="", index=True)

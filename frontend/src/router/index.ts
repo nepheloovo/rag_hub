@@ -76,10 +76,32 @@ const routes = [
         meta: { title: '模型配置', roles: ['platform_admin'] }
       },
       {
+        path: 'observability',
+        name: 'observability',
+        component: () => import('@/views/observability/Observability.vue'),
+        meta: { title: '可观测中心', roles: ['platform_admin', 'app_developer', 'kb_admin'] }
+      },
+      {
+        path: 'observability/traces/:id',
+        name: 'trace-detail',
+        component: () => import('@/views/observability/TraceDetail.vue'),
+        meta: { title: '调用链路', roles: ['platform_admin', 'app_developer', 'kb_admin'] }
+      },
+      {
+        path: 'eval',
+        name: 'eval',
+        component: () => import('@/views/eval/EvalCenter.vue'),
+        meta: { title: '评测集', roles: ['platform_admin', 'app_developer', 'kb_admin'] }
+      },
+      {
+        path: 'eval/:id',
+        name: 'eval-set-detail',
+        component: () => import('@/views/eval/EvalSetDetail.vue'),
+        meta: { title: '评测集详情', roles: ['platform_admin', 'app_developer', 'kb_admin'] }
+      },
+      {
         path: 'logs',
-        name: 'logs',
-        component: () => import('@/views/logs/Logs.vue'),
-        meta: { title: '日志监测', roles: ['platform_admin'] }
+        redirect: { path: '/app/observability', query: { tab: 'logs' } }
       }
     ]
   },

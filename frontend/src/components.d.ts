@@ -7,14 +7,23 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    BillingPanel: typeof import('./components/obs/BillingPanel.vue')['default']
+    BuildPanel: typeof import('./components/obs/BuildPanel.vue')['default']
+    CaseFlowModal: typeof import('./components/obs/CaseFlowModal.vue')['default']
+    CodeExplain: typeof import('./components/obs/CodeExplain.vue')['default']
+    ConversationLogs: typeof import('./components/obs/ConversationLogs.vue')['default']
+    JsonBlock: typeof import('./components/obs/JsonBlock.vue')['default']
+    MetricStrip: typeof import('./components/obs/MetricStrip.vue')['default']
     NAlert: typeof import('naive-ui')['NAlert']
     NButton: typeof import('naive-ui')['NButton']
     NCard: typeof import('naive-ui')['NCard']
+    NCheckbox: typeof import('naive-ui')['NCheckbox']
     NConfigProvider: typeof import('naive-ui')['NConfigProvider']
     NDataTable: typeof import('naive-ui')['NDataTable']
     NDialogProvider: typeof import('naive-ui')['NDialogProvider']
     NDivider: typeof import('naive-ui')['NDivider']
     NDrawer: typeof import('naive-ui')['NDrawer']
+    NDrawerContent: typeof import('naive-ui')['NDrawerContent']
     NDropdown: typeof import('naive-ui')['NDropdown']
     NDynamicTags: typeof import('naive-ui')['NDynamicTags']
     NEmpty: typeof import('naive-ui')['NEmpty']
@@ -32,6 +41,8 @@ declare module 'vue' {
     NMessageProvider: typeof import('naive-ui')['NMessageProvider']
     NModal: typeof import('naive-ui')['NModal']
     NProgress: typeof import('naive-ui')['NProgress']
+    NRadioButton: typeof import('naive-ui')['NRadioButton']
+    NRadioGroup: typeof import('naive-ui')['NRadioGroup']
     NScrollbar: typeof import('naive-ui')['NScrollbar']
     NSelect: typeof import('naive-ui')['NSelect']
     NSlider: typeof import('naive-ui')['NSlider']
@@ -47,5 +58,8 @@ declare module 'vue' {
     NUploadDragger: typeof import('naive-ui')['NUploadDragger']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    TraceTable: typeof import('./components/obs/TraceTable.vue')['default']
+    TraceTimeline: typeof import('./components/obs/TraceTimeline.vue')['default']
+    TrendChart: typeof import('./components/obs/TrendChart.vue')['default']
   }
 }

@@ -1,6 +1,7 @@
-"""Chat Flow 执行器：节点图遍历 + 变量模板 + 条件分支 + 流式输出"""
+"""Chat Flow 执行器：节点图遍历 + 变量模板 + 条件分支 + 流式输出（含节点级 Trace）"""
 import json
 import re
+import time
 
 import httpx
 from sqlalchemy.orm import Session
@@ -28,14 +29,14 @@ def _node_output(node: dict, variables: dict) -> str:
     return variables.get(key, "")
 
 
-def _execute_retrieval(db, node, variables, refs):
+def _execute_retrieval(db, node, variables, refs, rec=None):
     data = node.get("data", {})
     kb_ids = data.get("kb_ids") or []
     if not kb_ids:
         raise FlowError("知识库检索节点未绑定知识库")
     top_k = int(data.get("top_k") or 5)
     query = variables.get("input", "")
-    outcome = retrieve(db, kb_ids, query, embedding_ref=common_embedding_ref(db, kb_ids))
+    outcome = retrieve(db, kb_ids, query, embedding_ref=common_embedding_ref(db, kb_ids), rec=rec)
     chunks = outcome.chunks[:top_k]
     if not chunks:
         contexts = "（未检索到相关内容）"
@@ -59,7 +60,7 @@ def _execute_retrieval(db, node, variables, refs):
     return contexts
 
 
-def _execute_llm(db, node, variables):
+def _execute_llm(db, node, variables, rec=None):
     data = node.get("data", {})
     from langchain_core.prompts import ChatPromptTemplate
 
@@ -75,10 +76,17 @@ def _execute_llm(db, node, variables):
     ) | llm
     resp = chain.invoke({})
     text = resp if isinstance(resp, str) else (resp.content if hasattr(resp, "content") else str(resp))
+    usage = getattr(resp, "usage_metadata", None) or {}
+    usage_payload = {}
+    if rec and usage:
+        u = rec.add_usage(
+            "llm", model_name, int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0))
+        )
+        usage_payload = u.as_dict()
     key = data.get("output_var") or f"{node['id']}_output"
     variables[key] = text or ""
     variables["output"] = text or ""
-    return text or ""
+    return text or "", usage_payload, model_name
 
 
 def _execute_tool(db, node, variables, app=None):
@@ -142,7 +150,38 @@ def _evaluate_condition(node, variables) -> bool:
     return bool(left.strip())
 
 
-def _final_text(db, app: Application, variables: dict, refs: list) -> str:
+NODE_LABELS = {
+    "start": "开始",
+    "retrieval": "知识库检索",
+    "llm": "LLM 生成",
+    "tool": "工具调用",
+    "condition": "条件分支",
+    "answer": "结束输出",
+}
+
+
+def _node_label(node: dict) -> str:
+    data = node.get("data", {}) or {}
+    name = data.get("label") or data.get("name")
+    base = NODE_LABELS.get(node.get("type", ""), node.get("type", "节点"))
+    return f"{base} · {name}" if name else base
+
+
+def _record_exception(rec, exc, node: dict) -> None:
+    if not rec:
+        return
+    rec.record_span(
+        "exception",
+        f"异常 · {_node_label(node)}",
+        code_key="exception.error",
+        status="error",
+        error=str(exc),
+        input={"node_id": node.get("id"), "node_type": node.get("type")},
+        metadata={"node_id": node.get("id")},
+    )
+
+
+def _final_text(db, app: Application, variables: dict, refs: list, rec=None) -> str:
     """顺序执行流程：返回最终输出文本与引用（LLM/工具节点同步生成，answer 节点渲染模板）"""
     flow = app.flow or {}
     nodes = {n["id"]: n for n in flow.get("nodes", [])}
@@ -165,39 +204,104 @@ def _final_text(db, app: Application, variables: dict, refs: list) -> str:
         if not node:
             break
         ntype = node.get("type")
-        if ntype == "start":
-            variables.setdefault("input", variables.get("input", ""))
-        elif ntype == "retrieval":
-            _execute_retrieval(db, node, variables, refs)
-        elif ntype == "llm":
-            _execute_llm(db, node, variables)
-        elif ntype == "tool":
-            _execute_tool(db, node, variables, app)
-        elif ntype == "condition":
-            result = _evaluate_condition(node, variables)
-            outgoing = adjacency.get(current, [])
-            target = None
-            for handle, t in outgoing:
-                if (handle == "true" and result) or (handle == "false" and not result) or handle in (None, ""):
-                    target = t
-                    break
-            current = target
-            continue
-        elif ntype == "answer":
-            variables["output"] = render_template(node.get("data", {}).get("content", ""), variables)
+        node_start = time.monotonic()
+        span = None
+        if rec:
+            span = rec.record_span(
+                "flow.node",
+                _node_label(node),
+                code_key="flow.node",
+                status="running",
+                input={
+                    "node_id": node.get("id"),
+                    "node_type": ntype,
+                    "node_config": node.get("data") or {},
+                    "variables": variables,
+                },
+                metadata={"node_id": node.get("id"), "node_type": ntype, "step": steps},
+            )
+        detail = {}
+        try:
+            if ntype == "start":
+                variables.setdefault("input", variables.get("input", ""))
+            elif ntype == "retrieval":
+                contexts = _execute_retrieval(db, node, variables, refs, rec=rec)
+                detail = {"chunks_chars": len(contexts or "")}
+            elif ntype == "llm":
+                text, usage_payload, model_name = _execute_llm(db, node, variables, rec=rec)
+                detail = {"model": model_name, "chars": len(text or "")}
+                if span is not None:
+                    span.tokens = usage_payload
+                    span.cost_cny = float(usage_payload.get("cost_cny", 0))
+            elif ntype == "tool":
+                tool_span_start = time.monotonic()
+                result = _execute_tool(db, node, variables, app)
+                detail = {
+                    "result_chars": len(result or ""),
+                    "tool_ref": (node.get("data") or {}).get("tool_ref", ""),
+                    "duration_ms": int((time.monotonic() - tool_span_start) * 1000),
+                }
+            elif ntype == "condition":
+                result = _evaluate_condition(node, variables)
+                outgoing = adjacency.get(current, [])
+                target = None
+                for handle, t in outgoing:
+                    if (handle == "true" and result) or (handle == "false" and not result) or handle in (None, ""):
+                        target = t
+                        break
+                detail = {"result": result, "next": target}
+                if span is not None:
+                    span.output = {"node_type": ntype, "result": result, "next": target}
+                    rec.close_span(span, node_start, status="success")
+                current = target
+                continue
+            elif ntype == "answer":
+                variables["output"] = render_template(node.get("data", {}).get("content", ""), variables)
+                detail = {"chars": len(variables["output"] or "")}
+        except Exception as exc:  # noqa: BLE001
+            if span is not None:
+                span.status = "error"
+                span.error = str(exc)[:8000]
+                rec.close_span(span, node_start, status="error", output={"error": str(exc)})
+            _record_exception(rec, exc, node)
+            raise
+        if span is not None:
+            rec.close_span(
+                span,
+                node_start,
+                status="success",
+                output={"node_type": ntype, "variables": variables, **detail},
+            )
         outgoing = adjacency.get(current, [])
         current = outgoing[0][1] if outgoing else None
 
     if steps >= MAX_STEPS:
+        if rec:
+            rec.record_span(
+                "exception",
+                "异常 · 流程执行超过最大步数",
+                code_key="exception.error",
+                status="error",
+                error="流程执行超过最大步数，请检查是否成环",
+                error_hint="检查条件分支是否形成环路，或调高 MAX_STEPS。",
+            )
         raise FlowError("流程执行超过最大步数，请检查是否成环")
     return variables.get("output", "")
 
 
-def run_chatflow(db: Session, app: Application, query: str):
-    """执行 Chat Flow；返回 (answer, refs)"""
+def run_chatflow(db: Session, app: Application, query: str, rec=None):
+    """执行 Chat Flow；返回 (answer, refs, variables)"""
     variables = {"input": query}
     refs: list[dict] = []
-    answer = _final_text(db, app, variables, refs)
+    answer = _final_text(db, app, variables, refs, rec=rec)
+    if rec:
+        rec.record_span(
+            "final.answer",
+            "流程输出",
+            code_key="flow.node",
+            output={"content": answer},
+            metadata={"nodes": len((app.flow or {}).get("nodes", [])) if app.flow else 0},
+        )
     return answer, refs, variables
 
 

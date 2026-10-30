@@ -98,6 +98,9 @@
             <div v-if="m.role === 'assistant' && m.meta && !m.streaming" class="msg-meta">
               耗时 {{ (m.meta.durationMs / 1000).toFixed(1) }}s · {{ m.meta.tokens.toLocaleString() }} tokens
               <span v-if="m.meta.fake"> · 模拟模型（未配置服务商）</span>
+              <n-button v-if="m.meta.traceId" text size="tiny" type="primary" class="trace-link" @click="openTrace(m.meta.traceId)">
+                查看调用链路 →
+              </n-button>
             </div>
           </div>
           <div v-if="m.role === 'user'" class="avatar me">我</div>
@@ -136,6 +139,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
+import { useRouter } from 'vue-router'
 import {
   AddOutline,
   ChatbubblesOutline,
@@ -153,10 +157,11 @@ interface Msg {
   content: string
   streaming?: boolean
   refs?: RefItem[]
-  meta?: { durationMs: number; tokens: number; fake: boolean }
+  meta?: { durationMs: number; tokens: number; fake: boolean; traceId?: string }
 }
 
 const message = useMessage()
+const router = useRouter()
 const auth = useAuthStore()
 const scrollRef = ref<any>(null)
 const kbs = ref<KnowledgeBase[]>([])
@@ -257,6 +262,10 @@ async function openConversation(convId: string) {
   }
 }
 
+function openTrace(traceId: string) {
+  router.push(`/app/observability/traces/${traceId}`)
+}
+
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault()
@@ -299,7 +308,8 @@ async function send(text?: string) {
         aiMsg.meta = {
           durationMs: d.duration_ms,
           tokens: d.tokens?.total ?? 0,
-          fake: !!d.models?.fake
+          fake: !!d.models?.fake,
+          traceId: d.trace_id
         }
         if (!activeConvId.value && d.conversation_id) {
           activeConvId.value = d.conversation_id
@@ -623,6 +633,11 @@ onMounted(async () => {
   overflow: hidden;
 }
 
+
+.trace-link {
+  margin-left: 8px;
+  font-size: 11px;
+}
 .msg-meta {
   margin-top: 6px;
   font-size: 11px;

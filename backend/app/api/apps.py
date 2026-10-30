@@ -21,7 +21,8 @@ from app.schemas.application import (
     ApplicationUpdate,
 )
 from app.services.app_templates import get_template
-from app.services.chat import build_llm, stream_answer
+from app.services.chat import build_llm, format_contexts, format_history, stream_answer
+from app.services.observability import TraceRecorder, chunk_payload, explain_error, finish_trace_error
 from app.services.retrieval import retrieve
 
 router = APIRouter(prefix="/apps", tags=["应用"])
@@ -234,12 +235,15 @@ def _stream_text_chunks(text: str, size: int = 12):
         yield text[i : i + size]
 
 
-def app_chat_response(app_id: str, req: AppChatRequest) -> StreamingResponse:
+def app_chat_response(
+    app_id: str, req: AppChatRequest, source: str = "internal"
+) -> StreamingResponse:
     """应用级对话核心（简易 / Chat Flow / Agent 形态统一入口），供内部与公开路由复用"""
     if not req.query.strip():
         raise HTTPException(status_code=422, detail="问题不能为空")
 
     db = SessionLocal()
+    trace_id = ""
     try:
         app = db.get(Application, app_id)
         if not app:
@@ -288,24 +292,92 @@ def app_chat_response(app_id: str, req: AppChatRequest) -> StreamingResponse:
             if problems:
                 db.close()
                 raise HTTPException(status_code=422, detail="；".join(problems))
-            outcome = None
-            no_context_reply = ""
-        elif is_agent:
+
+        kb_names = (
+            db.query(KnowledgeBase.name)
+            .filter(KnowledgeBase.id.in_(app.kb_ids))
+            .all()
+        )
+        kb_names_str = "、".join(n[0] for n in kb_names) if kb_names else "（未绑定知识库）"
+
+        # 可观测：一次调用 = 一条 Trace
+        trace_type = "agent" if is_agent else "chatflow" if is_chatflow else "chat"
+        rec = TraceRecorder.begin(
+            db,
+            trace_type,
+            query=req.query,
+            title=f"{app.name} · {req.query.strip()[:48]}",
+            app=app,
+            kb_name=kb_names_str,
+            role=req.role,
+            source=source,
+            context={
+                "system_prompt": app.system_prompt,
+                "history": [{"role": m.role, "content": m.content} for m in history],
+                "app": {
+                    "id": app.id,
+                    "name": app.name,
+                    "kind": app.app_kind,
+                    "type": app.app_type,
+                    "category": app.category,
+                    "temperature": app.temperature,
+                    "llm_ref": app.llm_ref,
+                    "kb_ids": list(app.kb_ids),
+                    "show_refs": app.show_refs,
+                },
+                "flow": app.flow if is_chatflow else None,
+            },
+        )
+        trace_id = rec.id
+        if app.kb_ids:
+            rec.trace.kb_id = app.kb_ids[0]
+
+        outcome = None
+        no_context_reply = ""
+        if is_agent:
             # Agent：先做知识库检索供模型参考，工具由模型函数调用规划
             from app.services.retrieval import common_embedding_ref
 
-            outcome = retrieve(
-                db, list(app.kb_ids), req.query,
-                embedding_ref=common_embedding_ref(db, list(app.kb_ids)),
-            ) if app.kb_ids else None
-            no_context_reply = ""
-        else:
+            if app.kb_ids:
+                outcome = retrieve(
+                    db,
+                    list(app.kb_ids),
+                    req.query,
+                    embedding_ref=common_embedding_ref(db, list(app.kb_ids)),
+                    rec=rec,
+                )
+                rec.record_span(
+                    "context.assemble",
+                    "参考上下文组装",
+                    code_key="chat.context",
+                    input={
+                        "history_messages": len(history),
+                        "chunks": len(outcome.chunks),
+                        "query": req.query,
+                    },
+                    output={
+                        "chunk_count": len(outcome.chunks),
+                        "chunks": [chunk_payload(c, 1200) for c in outcome.chunks[:5]],
+                    },
+                )
+            else:
+                rec.record_span(
+                    "retrieval.search",
+                    "知识库检索（未绑定）",
+                    code_key="retrieval.search",
+                    status="skipped",
+                    output={"reason": "应用未绑定知识库，Agent 仅使用工具/Skill"},
+                )
+        elif not is_chatflow:
             # 多库联合检索（embedding 模型与索引保持一致）
             from app.services.retrieval import common_embedding_ref
 
             outcome = retrieve(
-                db, list(app.kb_ids), req.query,
+                db,
+                list(app.kb_ids),
+                req.query,
                 embedding_ref=common_embedding_ref(db, list(app.kb_ids)),
+                rec=rec,
             )
             # 相关性阈值过滤（默认 0 关闭；伪向量模式分值无意义，不要开启）
             if settings.retrieval_min_score > 0:
@@ -322,13 +394,34 @@ def app_chat_response(app_id: str, req: AppChatRequest) -> StreamingResponse:
                         no_context_reply += "\n\n" + app.transfer_hint
                 else:
                     no_context_reply = "知识库中未检索到相关内容，请换一种方式描述问题，或先在应用中导入更多文档。"
+            rec.record_span(
+                "context.assemble",
+                "上下文组装",
+                code_key="chat.context",
+                input={
+                    "history_messages": len(history),
+                    "chunks": len(outcome.chunks),
+                    "query": req.query,
+                },
+                output={
+                    "system_prompt": app.system_prompt,
+                    "chunk_count": len(outcome.chunks),
+                    "chunks": [chunk_payload(c, 1200) for c in outcome.chunks[:5]],
+                    "fallback": bool(no_context_reply),
+                },
+            )
 
-        kb_names = (
-            db.query(KnowledgeBase.name)
-            .filter(KnowledgeBase.id.in_(app.kb_ids))
-            .all()
-        )
-        kb_names_str = "、".join(n[0] for n in kb_names) if kb_names else "（未绑定知识库）"
+        if outcome is not None:
+            rec.trace.context = {
+                **(rec.trace.context or {}),
+                "retrieved_chunks": [chunk_payload(c, 2000) for c in outcome.chunks[:8]],
+                "models": {
+                    "embedding": outcome.embedding_model,
+                    "rerank": outcome.rerank_model,
+                    "fake_embedding": outcome.embedding_is_fake,
+                },
+            }
+        db.commit()
 
         app_meta = {
             "app_id": app.id,
@@ -351,6 +444,8 @@ def app_chat_response(app_id: str, req: AppChatRequest) -> StreamingResponse:
         raise
     except Exception as e:  # noqa: BLE001
         db.close()
+        if "trace_id" in locals():
+            finish_trace_error(trace_id, e, "异常 · 检索/上下文组装失败")
         raise HTTPException(status_code=500, detail=f"检索失败: {e}") from e
 
     def generate():
@@ -361,10 +456,11 @@ def app_chat_response(app_id: str, req: AppChatRequest) -> StreamingResponse:
         model_name = ""
         is_fake = False
         gen_db = SessionLocal()
+        rec = TraceRecorder.resume(gen_db, trace_id)
         try:
             refs = []
             if app_meta["is_agent"]:
-                # Agent：LLM 函数调用规划工具，流式输出
+                # Agent：LLM 函数调用规划 Tool/Skill，流式输出（rec 记录 ReAct 每一步）
                 from app.services.agent import run_agent
 
                 app_obj = gen_db.get(Application, app_meta["app_id"])
@@ -385,26 +481,28 @@ def app_chat_response(app_id: str, req: AppChatRequest) -> StreamingResponse:
                     contexts = "\n\n".join(
                         f"[{i}] {c.chunk.content}" for i, c in enumerate(outcome.chunks, start=1)
                     )
-                for piece in run_agent(gen_db, app_obj, req.query, contexts):
+                for piece in run_agent(gen_db, app_obj, req.query, contexts, rec=rec):
                     answer_parts.append(piece)
                     yield _sse("delta", {"text": piece})
-                model_name = "agent"
+                model_name = (rec.trace.model if rec else "") or "agent"
                 is_fake = False
             elif app_meta["is_chatflow"]:
                 # 执行 Chat Flow（LLM/HTTP 工具同步生成，最终文本流式输出）
-                from app.services.flow import FlowError, run_chatflow
+                from app.services.flow import run_chatflow
 
                 app_obj = gen_db.get(Application, app_meta["app_id"])
-                answer_text, flow_refs, _vars = run_chatflow(gen_db, app_obj, req.query)
+                answer_text, flow_refs, _vars = run_chatflow(
+                    gen_db, app_obj, req.query, rec=rec
+                )
                 if app_meta["show_refs"]:
                     refs = flow_refs
                 for piece in _stream_text_chunks(answer_text or "", size=8):
                     answer_parts.append(piece)
                     yield _sse("delta", {"text": piece})
-                model_name = "chatflow"
+                model_name = (rec.trace.model if rec else "") or "chatflow"
                 is_fake = False
             else:
-                if app_meta["show_refs"]:
+                if app_meta["show_refs"] and outcome:
                     for item in outcome.chunks[:5]:
                         meta = item.chunk.metadata_ or {}
                         refs.append(
@@ -419,16 +517,45 @@ def app_chat_response(app_id: str, req: AppChatRequest) -> StreamingResponse:
 
                 if no_context_reply:
                     # 无检索结果：直接流式输出兜底话术（不调用 LLM，避免编造）
+                    if rec:
+                        rec.record_span(
+                            "final.answer",
+                            "兜底话术（未调用 LLM）",
+                            code_key="chat.llm",
+                            status="skipped",
+                            output={"content": no_context_reply},
+                            metadata={"reason": "no_context"},
+                        )
                     for piece in _stream_text_chunks(no_context_reply):
                         answer_parts.append(piece)
                         yield _sse("delta", {"text": piece})
                     model_name = "none"
                 else:
+                    llm_span = None
+                    llm_span_start = 0.0
+                    if rec:
+                        llm_span, llm_span_start = rec.start_span(
+                            "llm.call",
+                            "LLM 流式生成",
+                            code_key="chat.llm",
+                            input={
+                                "question": req.query,
+                                "history_messages": len(history_rows),
+                                "context_chunks": len(outcome.chunks) if outcome else 0,
+                                "system_prompt": app_meta["system_prompt"],
+                                "history": format_history(history_rows),
+                                "contexts": format_contexts(outcome.chunks) if outcome else "",
+                            },
+                            context={
+                                "model_ref": app_meta["llm_ref"] or "全局默认",
+                                "temperature": app_meta["temperature"],
+                            },
+                        )
                     for chunk, fake, mname in stream_answer(
                         gen_db,
                         req.query,
                         history_rows,
-                        outcome.chunks,
+                        outcome.chunks if outcome else [],
                         system_prompt=app_meta["system_prompt"],
                         llm_ref=app_meta["llm_ref"] or None,
                         temperature=app_meta["temperature"],
@@ -447,6 +574,16 @@ def app_chat_response(app_id: str, req: AppChatRequest) -> StreamingResponse:
                         if usage:
                             llm_prompt_tokens = int(usage.get("input_tokens", 0))
                             llm_completion_tokens = int(usage.get("output_tokens", 0))
+                    if rec and llm_span is not None:
+                        u = rec.add_usage(
+                            "llm", model_name or "fake-echo-llm",
+                            llm_prompt_tokens, llm_completion_tokens,
+                        )
+                        rec.close_span(
+                            llm_span, llm_span_start,
+                            output={"content": "".join(answer_parts), "chars": sum(len(p) for p in answer_parts)},
+                            tokens=u.as_dict(), cost_cny=u.cost,
+                        )
 
             answer = "".join(answer_parts)
             duration_ms = int((time.monotonic() - start) * 1000)
@@ -483,9 +620,28 @@ def app_chat_response(app_id: str, req: AppChatRequest) -> StreamingResponse:
                     tokens=tokens,
                     duration_ms=duration_ms,
                     status="success",
+                    trace_id=trace_id,
                 )
             )
-            gen_db.commit()
+            if rec:
+                status = "degraded" if rec.trace.status == "degraded" else "success"
+                rec.finish(
+                    status=status,
+                    answer=answer,
+                    message_id=assistant_msg.id,
+                    context={
+                        "refs": refs,
+                        "tokens": tokens,
+                        "models": {
+                            "llm": model_name,
+                            "embedding": emb_model,
+                            "rerank": rerank_model,
+                            "fake": is_fake,
+                        },
+                    },
+                )
+            else:
+                gen_db.commit()
             yield _sse(
                 "done",
                 {
@@ -495,6 +651,7 @@ def app_chat_response(app_id: str, req: AppChatRequest) -> StreamingResponse:
                     "message_id": assistant_msg.id,
                     "conversation_id": conv_id,
                     "answer": answer,
+                    "trace_id": trace_id,
                     "app": app_meta,
                     "models": {
                         "llm": model_name,
@@ -508,6 +665,15 @@ def app_chat_response(app_id: str, req: AppChatRequest) -> StreamingResponse:
             gen_db.rollback()
             duration_ms = int((time.monotonic() - start) * 1000)
             try:
+                if rec:
+                    try:
+                        rec.record_span(
+                            "exception", "异常 · 生成失败", code_key="exception.error",
+                            status="error", error=str(e), error_hint=explain_error(e),
+                        )
+                        rec.finish(status="error", error=str(e))
+                    except Exception:  # noqa: BLE001
+                        gen_db.rollback()
                 gen_db.add(
                     ChatLog(
                         id=uuid.uuid4().hex,
@@ -523,6 +689,7 @@ def app_chat_response(app_id: str, req: AppChatRequest) -> StreamingResponse:
                         tokens={},
                         duration_ms=duration_ms,
                         status="error",
+                        trace_id=trace_id,
                     )
                 )
                 gen_db.commit()

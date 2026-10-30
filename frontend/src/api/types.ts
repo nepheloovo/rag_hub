@@ -75,6 +75,7 @@ export interface ChatDoneData {
   conversation_id: string
   answer: string
   models: { llm: string; embedding: string; rerank: string; fake: boolean }
+  trace_id?: string
 }
 
 export interface Conversation {
@@ -101,6 +102,8 @@ export interface LogItem {
   role: string
   kb_id: string
   kb_name: string
+  app_id?: string
+  app_name?: string
   query: string
   answer: string
   llm_model: string
@@ -109,6 +112,7 @@ export interface LogItem {
   tokens: { embedding: number; rerank: number; llm: number; total: number }
   duration_ms: number
   status: 'success' | 'error'
+  trace_id?: string
 }
 
 export interface LogStats {
@@ -193,4 +197,170 @@ export interface AppDoneData {
   answer: string
   app: Record<string, any>
   models: { llm: string; embedding: string; rerank: string; fake: boolean }
+  trace_id?: string
+}
+
+// ---------- 可观测 ----------
+export interface TraceTokens {
+  input?: number
+  output?: number
+  total?: number
+  embedding?: number
+  rerank?: number
+  llm?: number
+}
+
+export interface TraceRun {
+  id: string
+  trace_type: 'chat' | 'agent' | 'chatflow' | 'kb_build'
+  title: string
+  query: string
+  answer: string
+  status: 'running' | 'success' | 'error' | 'degraded'
+  app_id: string
+  app_name: string
+  app_kind: string
+  kb_id: string
+  kb_name: string
+  conversation_id: string
+  message_id: string
+  role: string
+  source: string
+  model: string
+  models: Record<string, string>
+  tokens: TraceTokens
+  cost_cny: number
+  duration_ms: number
+  span_count: number
+  started_at: string
+  error: string
+  metadata: Record<string, any>
+  cases?: { id: string; label: string }[]
+  context?: Record<string, any>
+  stages?: TraceSpan[]
+}
+
+export interface CodeExplainBlock {
+  lines: number[]
+  title: string
+  text: string
+}
+
+export interface TraceSpan {
+  id: string
+  trace_id: string
+  parent_id: string
+  seq: number
+  depth: number
+  span_type: string
+  name: string
+  status: 'running' | 'success' | 'error' | 'skipped' | 'degraded'
+  started_offset_ms: number
+  duration_ms: number
+  input: any
+  output: any
+  tokens: Record<string, any>
+  cost_cny: number
+  context: Record<string, any>
+  error: string
+  error_hint: string
+  code_key: string
+  code: string
+  code_explain: CodeExplainBlock[]
+  metadata: Record<string, any>
+}
+
+export interface TraceDetail extends TraceRun {
+  spans: TraceSpan[]
+  cases: { id: string; label: string; note: string; tags: string[]; created_at: string }[]
+  metrics: { llm_tokens: number; embedding_tokens: number; rerank_tokens: number }
+}
+
+export interface ObsOverview {
+  days: number
+  total: number
+  success: number
+  error: number
+  degraded: number
+  success_rate: number
+  p95_duration_ms: number
+  avg_duration_ms: number
+  tokens: number
+  cost_cny: number
+  agent_runs: number
+  tool_calls: number
+  tool_errors: number
+  trend: { date: string; total: number; success: number; error: number; tokens: number; cost_cny: number }[]
+  types: { type: string; count: number }[]
+  top_apps: { app_name: string; count: number; cost_cny: number }[]
+  skills: { name: string; count: number }[]
+}
+
+export interface BillingData {
+  days: number
+  total_cost_cny: number
+  total_tokens: number
+  calls: number
+  by_day: { date: string; cost_cny: number; input: number; output: number; calls: number }[]
+  by_app: { app_name: string; calls: number; cost_cny: number; tokens: number }[]
+  by_model: { model: string; cost_cny: number; input: number; output: number; spans: number }[]
+  by_purpose: { type: string; calls: number; cost_cny: number; tokens: number }[]
+}
+
+export interface ModelPrice {
+  model: string
+  input_price: number
+  output_price: number
+  currency: string
+  updated_at: string
+}
+
+// ---------- 评测集 ----------
+export interface EvalCase {
+  id: string
+  question: string
+  answer: string
+  reference_answer: string
+  contexts: any[]
+  label: 'good' | 'bad'
+  status: string
+  app_id: string
+  app_name: string
+  source: string
+  trace_id: string
+  tags: string[]
+  note: string
+  created_by: string
+  created_at: string
+  updated_at: string
+  sets?: { id: string; name: string }[]
+}
+
+export interface EvalSetSummary {
+  id: string
+  name: string
+  description: string
+  created_by: string
+  created_at: string
+  updated_at: string
+  case_count: number
+  good_count: number
+  bad_count: number
+  apps: string[]
+  tags: string[]
+}
+
+export interface EvalSetDetail extends EvalSetSummary {
+  cases: EvalCase[]
+}
+
+export interface EvalOverview {
+  case_count: number
+  good_count: number
+  bad_count: number
+  set_count: number
+  new_this_week: number
+  unassigned: number
+  top_tags: { tag: string; count: number }[]
+  top_apps: { app_name: string; count: number }[]
 }
