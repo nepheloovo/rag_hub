@@ -202,6 +202,29 @@
                 placeholder="可绑定多个知识库"
               />
             </n-form-item>
+            <n-form-item v-if="form.kb_ids.length" label="检索参数">
+              <div class="retrieval-box">
+                <label class="retrieval-toggle">
+                  <n-switch v-model:value="form.retrieval_custom" size="small" />
+                  <span>{{ form.retrieval_custom ? '自定义' : '使用平台默认（语义检索 · 引用上限 5 · 结果重排）' }}</span>
+                </label>
+                <template v-if="form.retrieval_custom">
+                  <n-radio-group v-model:value="form.retrieval.mode" size="small">
+                    <n-radio-button value="semantic">语义</n-radio-button>
+                    <n-radio-button value="fulltext">全文</n-radio-button>
+                    <n-radio-button value="hybrid">混合（推荐）</n-radio-button>
+                  </n-radio-group>
+                  <div class="retrieval-grid">
+                    <label>引用上限 <n-input-number v-model:value="form.retrieval.top_n" size="small" :min="1" :max="20" style="width: 90px" /></label>
+                    <label>最低相关度 {{ form.retrieval.score_threshold.toFixed(2) }}
+                      <n-slider v-model:value="form.retrieval.score_threshold" :min="0" :max="1" :step="0.05" style="width: 140px" />
+                    </label>
+                    <label>结果重排 <n-switch v-model:value="form.retrieval.rerank" size="small" /></label>
+                  </div>
+                  <div class="field-hint">可在知识库「测试检索」中调好参数后一键写入；修改后需重新评测再发布</div>
+                </template>
+              </div>
+            </n-form-item>
             <n-form-item label="LLM 模型">
               <n-select
                 v-model:value="form.llm_ref"
@@ -316,7 +339,7 @@ import {
   updateApp,
   unpublishApp
 } from '@/api'
-import type { AppKind, Application, Conversation, KnowledgeBase, Provider, RefItem } from '@/api/types'
+import type { AppKind, Application, Conversation, KnowledgeBase, Provider, RefItem, RetrievalMode } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
 import FlowEditor from './FlowEditor.vue'
 import ReleaseDialog from '@/components/release/ReleaseDialog.vue'
@@ -402,7 +425,9 @@ const form = reactive({
   fallback_reply: '',
   transfer_hint: '',
   publish_enabled: false,
-  visitor_daily_limit: 100 as number | null
+  visitor_daily_limit: 100 as number | null,
+  retrieval_custom: false,
+  retrieval: { mode: 'hybrid' as RetrievalMode, top_k: 20, top_n: 5, score_threshold: 0, rerank: true }
 })
 const saving = ref(false)
 const savedConfig = ref('')
@@ -457,6 +482,8 @@ function fillForm(a: Application) {
   form.app_kind = a.app_kind
   form.category = a.category
   form.kb_ids = [...a.kb_ids]
+  form.retrieval_custom = !!a.retrieval?.mode
+  form.retrieval = { mode: 'hybrid', top_k: 20, top_n: 5, score_threshold: 0, rerank: true, ...(a.retrieval || {}) }
   form.llm_ref = a.llm_ref || null
   form.system_prompt = a.system_prompt
   form.temperature = a.temperature
@@ -613,7 +640,8 @@ async function saveConfig() {
       fallback_reply: form.fallback_reply,
       transfer_hint: form.transfer_hint,
       publish_enabled: form.publish_enabled,
-      visitor_daily_limit: form.visitor_daily_limit ?? 0
+      visitor_daily_limit: form.visitor_daily_limit ?? 0,
+      retrieval: form.retrieval_custom ? { ...form.retrieval, top_k: Math.max(form.retrieval.top_k, form.retrieval.top_n) } : {}
     })
     app.value = updated
     fillForm(updated)
@@ -1017,4 +1045,8 @@ watch(() => route.query.tab, tab => {
   font-size: 12px;
   color: #3370ff;
 }
+.retrieval-box { width: 100%; display: flex; flex-direction: column; gap: 10px; }
+.retrieval-toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: #4e5969; cursor: pointer; }
+.retrieval-grid { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; font-size: 13px; color: #4e5969; }
+.retrieval-grid label { display: inline-flex; align-items: center; gap: 8px; }
 </style>

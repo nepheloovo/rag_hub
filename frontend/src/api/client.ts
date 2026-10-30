@@ -94,7 +94,8 @@ export async function* sseStream<T = any>(path: string, body: any): AsyncGenerat
 export function uploadFile<T = any>(
   path: string,
   file: File,
-  onProgress?: (percent: number) => void
+  onProgress?: (percent: number) => void,
+  fields: Record<string, string> = {}
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
@@ -121,6 +122,7 @@ export function uploadFile<T = any>(
     xhr.onerror = () => reject(new Error('网络错误，上传失败'))
     const form = new FormData()
     form.append('file', file)
+    Object.entries(fields).forEach(([key, value]) => form.append(key, value))
     xhr.send(form)
   })
 }

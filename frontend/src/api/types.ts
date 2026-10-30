@@ -24,8 +24,26 @@ export interface Doc {
   status: 'pending' | 'parsing' | 'done' | 'failed'
   error: string
   chunk_count: number
+  /** 逐文件切块配置，空对象 = 知识库默认 */
+  chunk_config: Partial<ChunkConfig>
   created_at: string
   updated_at: string
+}
+
+export type ChunkStrategy = 'smart' | 'heading' | 'separator' | 'fixed' | 'parent_child' | 'semantic' | 'qa_split' | 'page' | 'table_row'
+
+export interface ChunkConfig {
+  strategy: ChunkStrategy
+  chunk_size: number
+  chunk_overlap: number
+  separator: string
+  enhance_keywords: boolean
+  enhance_qa: boolean
+}
+
+export interface QaPair {
+  q: string
+  a: string
 }
 
 export interface ChunkPreview {
@@ -34,11 +52,35 @@ export interface ChunkPreview {
   source: string
   page: number
   heading: string
+  kind?: string
+  keywords?: string[]
+  qa_pairs?: QaPair[]
 }
 
 export interface RetrievalChunk extends ChunkPreview {
   doc_id: string
   score: number
+}
+
+export type RetrievalMode = 'semantic' | 'fulltext' | 'hybrid'
+
+export interface RetrievalOptions {
+  mode: RetrievalMode
+  top_k: number
+  top_n: number
+  score_threshold: number
+  rerank: boolean
+}
+
+export interface ChunkPreviewResult {
+  strategy: string
+  strategy_label: string
+  config: ChunkConfig
+  total: number
+  avg_chars: number
+  max_chars: number
+  chunks: { content: string; heading: string; page: number; kind: string }[]
+  warnings: string[]
 }
 
 export interface Provider {
@@ -164,6 +206,8 @@ export interface Application {
   transfer_hint: string
   flow: { nodes: any[]; edges: any[] } | null
   flow_history: Record<string, any>
+  /** 检索参数，空对象 = 全局默认 */
+  retrieval: Partial<RetrievalOptions>
   publish_enabled: boolean
   visitor_daily_limit: number
   call_count_7d: number

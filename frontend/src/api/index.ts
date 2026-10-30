@@ -2,6 +2,10 @@
 import { api, sseStream, uploadFile } from './client'
 export { api } from './client'
 import type {
+  ChunkConfig,
+  ChunkPreviewResult,
+  QaPair,
+  RetrievalOptions,
   BadFeedbackItem,
   KnowledgeGap,
   AppDoneData,
@@ -55,30 +59,38 @@ export const deleteKb = (id: string) => api(`/knowledge-bases/${id}`, { method: 
 
 // ---------- 文档 ----------
 export const listDocs = (kbId: string) => api<Doc[]>(`/knowledge-bases/${kbId}/documents`)
-export const uploadDoc = (kbId: string, file: File, onProgress?: (p: number) => void, autoIndex = true) => {
-  // auto_index=false：仅存储，预览分块后手动索引入库
-  const wrapper = (path: string, f: File, cb?: (p: number) => void) =>
-    uploadFile<Doc>(`${path}${path.includes('?') ? '&' : '?'}auto_index=${autoIndex}`, f, cb)
-  return wrapper(`/knowledge-bases/${kbId}/documents`, file, onProgress)
-}
+export const uploadDoc = (
+  kbId: string, file: File, onProgress?: (p: number) => void, autoIndex = true, config?: Partial<ChunkConfig>
+) =>
+  // auto_index=false：仅存储，预览分块后手动索引入库；config 为逐文件切块配置
+  uploadFile<Doc>(`/knowledge-bases/${kbId}/documents`, file, onProgress, {
+    auto_index: String(autoIndex),
+    ...(config ? { config: JSON.stringify(config) } : {})
+  })
+export const webImport = (kbId: string, urls: string[], config?: Partial<ChunkConfig>) =>
+  api<Doc[]>(`/knowledge-bases/${kbId}/web-import`, { method: 'POST', body: JSON.stringify({ urls, config: config || {} }) })
+export const textImport = (kbId: string, data: { title: string; content: string; config?: Partial<ChunkConfig> }) =>
+  api<Doc>(`/knowledge-bases/${kbId}/text-import`, { method: 'POST', body: JSON.stringify({ ...data, config: data.config || {} }) })
 export const deleteDoc = (docId: string) => api(`/documents/${docId}`, { method: 'DELETE' })
-export const reparseDoc = (docId: string) =>
-  api<Doc>(`/documents/${docId}/reparse`, { method: 'POST' })
+export const reparseDoc = (docId: string, config?: Partial<ChunkConfig>) =>
+  api<Doc>(`/documents/${docId}/reparse`, { method: 'POST', ...(config ? { body: JSON.stringify({ config }) } : {}) })
 export const indexDoc = (docId: string) => api<Doc>(`/documents/${docId}/index`, { method: 'POST' })
-export const previewChunks = (docId: string, strategy?: string) =>
-  api<{
-    strategy: string
-    strategy_label: string
-    total: number
-    chunks: { content: string; heading: string; page: number; kind: string }[]
-    warnings: string[]
-  }>(`/documents/${docId}/preview${strategy ? `?strategy=${strategy}` : ''}`, { method: 'POST' })
+export const previewChunks = (docId: string, config?: Partial<ChunkConfig>) =>
+  api<ChunkPreviewResult>(`/documents/${docId}/preview`, { method: 'POST', body: JSON.stringify({ config: config || {} }) })
+export const updateChunk = (chunkId: string, data: { content?: string; keywords?: string[]; qa_pairs?: QaPair[] }) =>
+  api<ChunkPreview>(`/chunks/${chunkId}`, { method: 'PATCH', body: JSON.stringify(data) })
+export const deleteChunk = (chunkId: string) => api(`/chunks/${chunkId}`, { method: 'DELETE' })
 export const listChunks = (docId: string, limit = 20, offset = 0) =>
   api<ChunkPreview[]>(`/documents/${docId}/chunks?limit=${limit}&offset=${offset}`)
-export const testRetrieval = (kbId: string, q: string) =>
-  api<{ query: string; chunks: RetrievalChunk[]; models: Record<string, any> }>(
-    `/knowledge-bases/${kbId}/test-retrieval?q=${encodeURIComponent(q)}`
+export const testRetrieval = (kbId: string, q: string, options?: Partial<RetrievalOptions>) => {
+  const qs = new URLSearchParams({ q })
+  Object.entries(options || {}).forEach(([k, v]) => {
+    if (v !== undefined && v !== null) qs.set(k, String(v))
+  })
+  return api<{ query: string; options: RetrievalOptions; chunks: RetrievalChunk[]; models: Record<string, any> }>(
+    `/knowledge-bases/${kbId}/test-retrieval?${qs.toString()}`
   )
+}
 
 // ---------- 模型服务商 ----------
 export const listProviders = () => api<Provider[]>('/providers')
