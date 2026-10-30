@@ -70,6 +70,8 @@ def ensure_schema() -> None:
             "ALTER TABLE eval_sets ADD COLUMN IF NOT EXISTS app_id VARCHAR(32) NOT NULL DEFAULT ''",
             "ALTER TABLE eval_sets ADD COLUMN IF NOT EXISTS is_release_gate BOOLEAN NOT NULL DEFAULT FALSE",
             "CREATE INDEX IF NOT EXISTS ix_eval_sets_app_id ON eval_sets (app_id)",
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS chunk_config JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE applications ADD COLUMN IF NOT EXISTS retrieval JSONB NOT NULL DEFAULT '{}'::jsonb",
         ):
             conn.execute(text(statement))
 
@@ -115,6 +117,9 @@ app.include_router(
 )
 app.include_router(
     knowledge.doc_router, prefix=settings.api_prefix, dependencies=[Depends(get_current_user)]
+)
+app.include_router(
+    knowledge.chunk_router, prefix=settings.api_prefix, dependencies=[Depends(get_current_user)]
 )
 app.include_router(
     tools.router, prefix=settings.api_prefix, dependencies=[Depends(get_current_user)]

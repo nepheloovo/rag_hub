@@ -4,7 +4,8 @@ import uuid
 from app.celery_app import celery_app
 from app.database import SessionLocal
 from app.models import Chunk, Document, KnowledgeBase
-from app.services.chunking import split_markdown
+from app.services.chunk_enhancement import chunk_index_text, enhance_chunks
+from app.services.chunking import normalize_chunk_config, split_markdown
 from app.services.embedding import get_embedding_service
 from app.services.files import resolve_stored_path
 from app.services.observability import TraceRecorder, explain_error
@@ -42,7 +43,11 @@ def parse_document(self, doc_id: str) -> dict:
         if not doc:
             return {"doc_id": doc_id, "status": "missing"}
         kb = db.get(KnowledgeBase, doc.kb_id)
-        strategy = kb.chunk_strategy if kb and kb.chunk_strategy else "smart"
+        # 逐文件配置优先，未配置的项回退知识库默认
+        config = normalize_chunk_config(
+            doc.chunk_config, kb.chunk_strategy if kb and kb.chunk_strategy else "smart"
+        )
+        strategy = config["strategy"]
 
         doc.status = "parsing"
         doc.error = ""
@@ -62,7 +67,7 @@ def parse_document(self, doc_id: str) -> dict:
                 "kb": getattr(kb, "name", ""),
                 "embedding_ref": getattr(kb, "embedding_ref", ""),
             },
-            metadata={"doc_id": doc_id, "kb_id": doc.kb_id, "strategy": strategy},
+            metadata={"doc_id": doc_id, "kb_id": doc.kb_id, "strategy": strategy, "chunk_config": config},
         )
 
         # 1. 解析为统一 Markdown
@@ -84,12 +89,14 @@ def parse_document(self, doc_id: str) -> dict:
             "build.chunk",
             f"分块 · {strategy}",
             code_key="build.chunk",
-            input={"strategy": strategy, "chunk_size": settings_chunk_size()},
+            input={k: config[k] for k in ("strategy", "chunk_size", "chunk_overlap", "separator")},
         ) as span:
             chunks = split_markdown(
                 parsed.markdown,
                 strategy=strategy,
-                chunk_size=settings_chunk_size(),
+                chunk_size=config["chunk_size"],
+                chunk_overlap=config["chunk_overlap"],
+                separator=config["separator"],
                 db=db,
             )
             if not chunks:
@@ -99,6 +106,19 @@ def parse_document(self, doc_id: str) -> dict:
                 "avg_chars": round(sum(len(c.get("content") or "") for c in chunks) / len(chunks)),
                 "preview": [c["content"][:200] for c in chunks[:3]],
             }
+
+        # 2.5 分块增强：关键词 / 问答对（可选，模型异常时降级不中断）
+        if config["enhance_keywords"] or config["enhance_qa"]:
+            with rec.span(
+                "build.enhance",
+                "分块增强",
+                code_key="build.enhance",
+                input={"keywords": config["enhance_keywords"], "qa": config["enhance_qa"], "chunks": len(chunks)},
+            ) as span:
+                result = enhance_chunks(
+                    db, chunks, keywords=config["enhance_keywords"], qa=config["enhance_qa"],
+                )
+                span.output = result
 
         # 3. embedding：使用知识库绑定的模型（未绑定回退全局默认/伪向量）
         embed_service = get_embedding_service(db, (kb.embedding_ref if kb else None) or None)
@@ -111,7 +131,8 @@ def parse_document(self, doc_id: str) -> dict:
             vectors: list[list[float]] = []
             embed_tokens = 0
             for i in range(0, len(chunks), EMBED_BATCH_SIZE):
-                batch = [c["content"] for c in chunks[i : i + EMBED_BATCH_SIZE]]
+                # 向量化文本 = 增强内容（关键词 / 可回答的问题）+ 原文
+                batch = [chunk_index_text(c["content"], c) for c in chunks[i : i + EMBED_BATCH_SIZE]]
                 batch_vectors, used = embed_service.embed_texts_with_usage(batch)
                 vectors.extend(batch_vectors)
                 embed_tokens += used
@@ -155,6 +176,8 @@ def parse_document(self, doc_id: str) -> dict:
                             "parent_group": chunk.get("parent_group"),
                             "strategy": strategy,
                             "embedding_model": embed_service.model,
+                            "keywords": chunk.get("keywords") or [],
+                            "qa_pairs": chunk.get("qa_pairs") or [],
                         },
                         embedding=vector,
                     )

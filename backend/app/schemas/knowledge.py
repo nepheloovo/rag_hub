@@ -46,6 +46,7 @@ class DocumentOut(BaseModel):
     status: str
     error: str
     chunk_count: int
+    chunk_config: dict = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 
@@ -58,3 +59,6 @@ class ChunkOut(BaseModel):
     source: str = ""
     page: int = 0
     heading: str = ""
+    kind: str = "chunk"
+    keywords: list[str] = Field(default_factory=list)
+    qa_pairs: list[dict] = Field(default_factory=list)

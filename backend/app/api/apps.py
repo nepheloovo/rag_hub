@@ -194,6 +194,10 @@ def update_app(app_id: str, data: ApplicationUpdate, db: Session = Depends(get_d
         raise HTTPException(status_code=422, detail="请通过发布、回滚或下线接口修改状态")
     payload = data.model_dump(exclude_none=True)
     flow_update = payload.pop("flow", None)
+    if "retrieval" in payload:
+        from app.services.retrieval import normalize_retrieval
+
+        payload["retrieval"] = normalize_retrieval(payload["retrieval"])
     for field, value in payload.items():
         setattr(app, field, value)
     app.version = (app.version or 0) + 1  # 每次保存版本 +1
@@ -472,6 +476,7 @@ def app_chat_response(
                     req.query,
                     embedding_ref=common_embedding_ref(db, list(app.kb_ids)),
                     rec=rec,
+                    options=app.retrieval,
                 )
                 rec.record_span(
                     "context.assemble",
@@ -505,6 +510,7 @@ def app_chat_response(
                 req.query,
                 embedding_ref=common_embedding_ref(db, list(app.kb_ids)),
                 rec=rec,
+                options=app.retrieval,
             )
             # 相关性阈值过滤（默认 0 关闭；伪向量模式分值无意义，不要开启）
             if settings.retrieval_min_score > 0:

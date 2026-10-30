@@ -23,6 +23,32 @@ STRATEGY_LABELS = {
     "table_row": "表格按行：Excel/CSV 每行一块，表头作为上下文",
 }
 
+
+
+def normalize_chunk_config(config: dict | None, default_strategy: str = "smart") -> dict:
+    """逐文件切块配置归一化：非法值回退默认，数值夹到合理区间"""
+    raw = config if isinstance(config, dict) else {}
+    strategy = raw.get("strategy") if raw.get("strategy") in STRATEGY_LABELS else default_strategy
+    if strategy not in STRATEGY_LABELS:
+        strategy = "smart"
+
+    def _int(key: str, default: int, low: int, high: int) -> int:
+        try:
+            return max(low, min(high, int(raw.get(key, default))))
+        except (TypeError, ValueError):
+            return default
+
+    chunk_size = _int("chunk_size", settings.chunk_size, 100, 4000)
+    return {
+        "strategy": strategy,
+        "chunk_size": chunk_size,
+        "chunk_overlap": _int("chunk_overlap", min(settings.chunk_overlap, chunk_size // 2), 0, chunk_size // 2),
+        "separator": str(raw.get("separator") or "")[:50],
+        "enhance_keywords": bool(raw.get("enhance_keywords")),
+        "enhance_qa": bool(raw.get("enhance_qa")),
+    }
+
+
 PAGE_MARK_RE = re.compile(r"<!--\s*第\s*(\d+)\s*页(?:\(OCR\))?\s*-->")
 TABLE_RE = re.compile(r"\|[^\n]+\|\n\|[\s\-|]+\|\n((?:\|[^\n]*\|\n?)+)", re.M)
 

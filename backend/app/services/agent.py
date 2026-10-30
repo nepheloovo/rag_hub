@@ -165,6 +165,7 @@ def _run_skill(db: Session, app: Application, name: str, args: dict, rec=None) -
             query,
             embedding_ref=common_embedding_ref(db, list(app.kb_ids)),
             rec=rec,
+            options={**(app.retrieval or {}), "top_n": top_k},
         )
         if not outcome.chunks:
             return "知识库中未检索到相关内容。"

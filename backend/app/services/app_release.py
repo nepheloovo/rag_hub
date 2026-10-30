@@ -16,12 +16,16 @@ BUILDER_ROLES = ("platform_admin", "app_developer", "kb_admin")
 SNAPSHOT_FIELDS = (
     "name", "description", "app_type", "app_kind", "category", "kb_ids", "llm_ref",
     "system_prompt", "temperature", "show_refs", "opening", "suggested_questions",
-    "fallback_reply", "transfer_hint", "flow",
+    "fallback_reply", "transfer_hint", "flow", "retrieval",
 )
 
 
 def snapshot_app(app: Application) -> dict:
-    return {key: copy.deepcopy(getattr(app, key)) for key in SNAPSHOT_FIELDS}
+    snapshot = {key: copy.deepcopy(getattr(app, key)) for key in SNAPSHOT_FIELDS}
+    # 后加字段为空时不入快照，保证旧版本与旧评测记录的指纹不变
+    if not snapshot.get("retrieval"):
+        snapshot.pop("retrieval", None)
+    return snapshot
 
 
 def snapshot_fingerprint(snapshot: dict) -> str:

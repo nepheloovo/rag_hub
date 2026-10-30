@@ -40,6 +40,8 @@ class Application(Base):
     # 客服专属：未检索到内容时的兜底话术 / 转人工提示
     fallback_reply: Mapped[str] = mapped_column(Text, default="")
     transfer_hint: Mapped[str] = mapped_column(Text, default="")
+    # 检索参数：{mode: semantic/fulltext/hybrid, top_k, top_n, score_threshold, rerank}，空 = 全局默认
+    retrieval: Mapped[dict] = mapped_column(JSONB, default=dict)
     # Chat Flow 编排：{"nodes": [...], "edges": [...]}
     flow: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
     # 版本快照：{"2": {flow}, "3": {flow}, ...}（上限 20）

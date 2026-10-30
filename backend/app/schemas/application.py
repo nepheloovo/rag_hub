@@ -30,6 +30,7 @@ class ApplicationUpdate(BaseModel):
     fallback_reply: Optional[str] = None
     transfer_hint: Optional[str] = None
     flow: Optional[dict] = None  # Chat Flow 编排（保存时自动生成版本快照）
+    retrieval: Optional[dict] = None  # 检索参数（保存时归一化）
     publish_enabled: Optional[bool] = None
     visitor_daily_limit: Optional[int] = Field(None, ge=0)
 
@@ -57,6 +58,7 @@ class ApplicationOut(BaseModel):
     transfer_hint: str
     flow: Optional[dict] = None
     flow_history: dict = Field(default_factory=dict)
+    retrieval: dict = Field(default_factory=dict)
     publish_enabled: bool = False
     visitor_daily_limit: int = 0
     created_at: datetime

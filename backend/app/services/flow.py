@@ -36,7 +36,10 @@ def _execute_retrieval(db, node, variables, refs, rec=None):
         raise FlowError("知识库检索节点未绑定知识库")
     top_k = int(data.get("top_k") or 5)
     query = variables.get("input", "")
-    outcome = retrieve(db, kb_ids, query, embedding_ref=common_embedding_ref(db, kb_ids), rec=rec)
+    outcome = retrieve(
+        db, kb_ids, query, embedding_ref=common_embedding_ref(db, kb_ids), rec=rec,
+        options={"mode": data.get("mode") or "semantic", "top_k": max(20, top_k), "top_n": top_k},
+    )
     chunks = outcome.chunks[:top_k]
     if not chunks:
         contexts = "（未检索到相关内容）"

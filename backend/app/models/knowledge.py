@@ -45,6 +45,8 @@ class Document(Base):
     # pending -> parsing -> done / failed
     error: Mapped[str] = mapped_column(Text, default="")
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 逐文件切块配置：{strategy, chunk_size, chunk_overlap, separator, enhance_keywords, enhance_qa}，空 = 用知识库默认
+    chunk_config: Mapped[dict] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
