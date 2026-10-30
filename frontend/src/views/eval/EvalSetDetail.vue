@@ -25,31 +25,46 @@
           </div>
         </div>
         <div class="action-col">
-          <n-button size="small" @click="openEdit">编辑信息</n-button>
+          <n-button size="small" :disabled="running" @click="openEdit">编辑信息</n-button>
           <n-button size="small" @click="exportJsonl">
             <template #icon><n-icon><DownloadOutline /></n-icon></template>
             导出 JSONL
           </n-button>
-          <n-button size="small" type="primary" @click="openAddCases">
+          <n-button size="small" type="primary" :disabled="running" @click="openAddCases">
             <template #icon><n-icon><AddOutline /></n-icon></template>
             添加 Case
           </n-button>
-          <n-button size="small" text type="error" @click="confirmDelete">删除</n-button>
+          <n-button size="small" text type="error" :disabled="running" @click="confirmDelete">删除</n-button>
         </div>
       </div>
 
       <MetricStrip :items="metrics" />
 
+      <div class="quality-panel">
+        <div class="binding-row">
+          <div class="binding-field">
+            <label class="label">绑定应用</label>
+            <n-select :value="set.app_id || null" :options="appOptions" filterable clearable placeholder="选择应用，评测其当前草稿" :disabled="bindingSaving || running" :loading="bindingSaving" @update:value="bindApp" />
+          </div>
+          <div class="gate-field">
+            <label class="label">发布门禁</label>
+            <n-switch :value="set.is_release_gate" :disabled="!set.app_id || bindingSaving || running" :loading="bindingSaving" aria-label="发布门禁" @update:value="toggleGate" />
+          </div>
+        </div>
+        <div class="standard-hint">门禁评测必须基于当前草稿全部通过，才可发布。待补标准的 Case 不参与运行。</div>
+        <EvalRunPanel :key="set.id" :set-id="set.id" :app-id="set.app_id" :latest-run="set.latest_run" :disabled="bindingSaving || saving" @completed="reload" @running-change="running = $event" />
+      </div>
+
       <div class="list-panel">
         <div class="list-head">
           <div class="list-title">Case 列表</div>
           <div class="list-actions">
-            <n-radio-group v-model:value="labelFilter" size="small" @update:value="load">
+            <n-radio-group v-model:value="labelFilter" size="small">
               <n-radio-button value="">全部 {{ set.case_count }}</n-radio-button>
               <n-radio-button value="good">Good {{ set.good_count }}</n-radio-button>
               <n-radio-button value="bad">Bad {{ set.bad_count }}</n-radio-button>
             </n-radio-group>
-            <n-button size="small" quaternary @click="manualModal = true">回流新 Case</n-button>
+            <n-button size="small" quaternary :disabled="running" @click="manualModal = true">回流新 Case</n-button>
           </div>
         </div>
 
@@ -58,6 +73,9 @@
             <div class="case-label">
               <n-tag size="tiny" :bordered="false" :type="item.label === 'good' ? 'success' : 'error'">
                 {{ item.label === 'good' ? 'Good' : 'Bad' }}
+              </n-tag>
+              <n-tag size="tiny" :bordered="false" :type="item.readiness === 'ready' ? 'success' : 'warning'">
+                {{ item.readiness === 'ready' ? '可运行' : '待补标准' }}
               </n-tag>
             </div>
             <div class="case-main" @click="openCase(item)">
@@ -74,33 +92,34 @@
             </div>
             <div class="case-actions">
               <n-button v-if="item.trace_id" text size="tiny" type="primary" @click="openTrace(item.trace_id)">链路</n-button>
-              <n-button text size="tiny" @click="openCase(item)">查看</n-button>
-              <n-button text size="tiny" type="error" @click="removeCase(item)">移出</n-button>
+              <n-button text size="tiny" :disabled="running" @click="openCase(item)">编辑</n-button>
+              <n-button text size="tiny" type="error" :disabled="running" @click="removeCase(item)">移出</n-button>
             </div>
           </div>
         </div>
         <div v-else class="empty">
-          <div class="empty-title">这个评测集还没有 Case</div>
+          <div class="empty-title">{{ set.case_count ? '没有符合筛选条件的 Case' : '这个评测集还没有 Case' }}</div>
           <div class="empty-desc">从 Case 池挑选，或直接回流一条线上对话，把 good / bad 样本汇总到这里。</div>
-          <n-button size="small" type="primary" ghost @click="openAddCases">从 Case 池添加</n-button>
+          <n-button size="small" type="primary" ghost :disabled="running" @click="openAddCases">从 Case 池添加</n-button>
         </div>
       </div>
 
-      <!-- Case 查看 -->
-      <n-drawer v-model:show="caseDrawer" :width="580" placement="right">
+      <!-- Case 标准编辑 -->
+      <n-drawer v-model:show="caseDrawer" :width="580" style="max-width: 100vw" placement="right">
         <n-drawer-content v-if="activeCase" closable>
           <template #header>
             <div class="drawer-head">
               <n-tag size="small" :bordered="false" :type="activeCase.label === 'good' ? 'success' : 'error'">
                 {{ activeCase.label === 'good' ? 'Good Case' : 'Bad Case' }}
               </n-tag>
+              <n-tag size="tiny" :bordered="false" :type="activeCase.readiness === 'ready' ? 'success' : 'warning'">{{ activeCase.readiness === 'ready' ? '可运行' : '待补标准' }}</n-tag>
               <span class="drawer-sub">{{ sourceLabel(activeCase.source) }}</span>
             </div>
           </template>
           <div class="case-detail">
             <div class="detail-block">
               <div class="detail-label">问题</div>
-              <div class="detail-text">{{ activeCase.question }}</div>
+              <n-input v-model:value="editCase.question" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" />
             </div>
             <div class="detail-block">
               <div class="detail-label">线上回答</div>
@@ -108,11 +127,24 @@
             </div>
             <div class="detail-block">
               <div class="detail-label">期望回答</div>
-              <div class="detail-text reference">{{ activeCase.reference_answer || '（未填写）' }}</div>
+              <n-input v-model:value="editCase.reference_answer" type="textarea" :autosize="{ minRows: 3, maxRows: 6 }" placeholder="填写期望回答，作为回归对照" />
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">必须包含关键词</div>
+              <n-dynamic-tags v-model:value="editCase.expected_keywords" />
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">禁止出现关键词</div>
+              <n-dynamic-tags v-model:value="editCase.forbidden_keywords" />
+            </div>
+            <div class="detail-block">
+              <div class="detail-label">要求引用</div>
+              <n-switch v-model:value="editCase.require_citations" aria-label="要求引用" style="align-self: flex-start" />
+              <span class="standard-hint">填写期望回答、关键词或引用要求后，Case 才能参与评测。</span>
             </div>
             <div class="detail-block">
               <div class="detail-label">备注</div>
-              <div class="detail-text">{{ activeCase.note || '（无）' }}</div>
+              <n-input v-model:value="editCase.note" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" />
             </div>
             <div class="detail-meta">
               <span>应用：{{ activeCase.app_name || '—' }}</span>
@@ -123,6 +155,13 @@
               查看原始调用链路
             </n-button>
           </div>
+          <template #footer>
+            <div class="modal-footer">
+              <div class="spacer"></div>
+              <n-button size="small" @click="caseDrawer = false">取消</n-button>
+              <n-button size="small" type="primary" :loading="saving" :disabled="running || !editCase.question.trim()" @click="saveCase">保存修改</n-button>
+            </div>
+          </template>
         </n-drawer-content>
       </n-drawer>
 
@@ -175,7 +214,7 @@
           <div class="modal-footer">
             <div class="spacer"></div>
             <n-button size="small" @click="editModal = false">取消</n-button>
-            <n-button size="small" type="primary" :loading="saving" @click="saveEdit">保存</n-button>
+            <n-button size="small" type="primary" :loading="saving" :disabled="!editSet.name.trim()" @click="saveEdit">保存</n-button>
           </div>
         </template>
       </n-modal>
@@ -184,6 +223,8 @@
         v-model:show="manualModal"
         mode="manual"
         :default-set-id="set.id"
+        :preset-app-id="set.app_id"
+        :preset-app-name="set.app_name"
         @saved="reload"
       />
     </template>
@@ -196,7 +237,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDialog, useMessage } from 'naive-ui'
 import {
@@ -208,13 +249,16 @@ import {
   addCasesToSet,
   deleteEvalSet,
   getEvalSet,
+  listApps,
   listCases,
   removeCaseFromSet,
-  updateEvalSet
+  updateEvalSet,
+  updateCase
 } from '@/api'
-import type { EvalCase, EvalSetDetail } from '@/api/types'
+import type { Application, EvalCase, EvalSetDetail } from '@/api/types'
 import MetricStrip from '@/components/obs/MetricStrip.vue'
 import CaseFlowModal from '@/components/obs/CaseFlowModal.vue'
+import EvalRunPanel from '@/components/release/EvalRunPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -222,10 +266,22 @@ const message = useMessage()
 const dialog = useDialog()
 const loading = ref(false)
 const saving = ref(false)
+const bindingSaving = ref(false)
+const running = ref(false)
+const apps = ref<Application[]>([])
+const appOptions = computed(() => apps.value.map(app => ({ label: app.name, value: app.id })))
 const set = ref<EvalSetDetail | null>(null)
 const labelFilter = ref('')
 const caseDrawer = ref(false)
 const activeCase = ref<EvalCase | null>(null)
+const editCase = reactive({
+  question: '',
+  reference_answer: '',
+  expected_keywords: [] as string[],
+  forbidden_keywords: [] as string[],
+  require_citations: false,
+  note: ''
+})
 const addModal = ref(false)
 const poolQuery = ref('')
 const availableCases = ref<EvalCase[]>([])
@@ -241,18 +297,17 @@ const filteredCases = computed(() => {
 })
 const metrics = computed(() => {
   const s = set.value
-  const coverage = s?.apps?.length || 0
   return [
     { label: 'Case 总数', value: s?.case_count ?? 0 },
     { label: 'Good', value: s?.good_count ?? 0, tone: 'good' as const },
     { label: 'Bad', value: s?.bad_count ?? 0, tone: 'bad' as const },
-    { label: '覆盖率', value: `${coverage} 个应用` },
-    { label: '标签', value: s?.tags?.length ?? 0 }
+    { label: '可运行', value: s?.cases.filter(c => c.readiness === 'ready').length ?? 0, tone: 'good' as const },
+    { label: '待补标准', value: s?.cases.filter(c => c.readiness !== 'ready').length ?? 0 }
   ]
 })
 
 function sourceLabel(source: string) {
-  return ({ trace: '链路回流', log: '日志回流', manual: '手工录入' } as Record<string, string>)[source] || source
+  return ({ trace: '链路回流', log: '日志回流', manual: '手工录入', ai: 'AI 设计' } as Record<string, string>)[source] || source
 }
 function formatDateTime(iso: string) {
   const d = new Date(iso)
@@ -260,26 +315,75 @@ function formatDateTime(iso: string) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 function openCase(item: EvalCase) {
+  if (running.value) return
   activeCase.value = item
+  editCase.question = item.question
+  editCase.reference_answer = item.reference_answer
+  editCase.expected_keywords = [...(item.expected_keywords || [])]
+  editCase.forbidden_keywords = [...(item.forbidden_keywords || [])]
+  editCase.require_citations = item.require_citations || false
+  editCase.note = item.note
   caseDrawer.value = true
+}
+async function saveCase() {
+  if (!activeCase.value || running.value || !editCase.question.trim()) return
+  saving.value = true
+  try {
+    const updated = await updateCase(activeCase.value.id, {
+      ...editCase,
+      expected_keywords: editCase.expected_keywords.map(k => k.trim()).filter(Boolean),
+      forbidden_keywords: editCase.forbidden_keywords.map(k => k.trim()).filter(Boolean)
+    })
+    activeCase.value = updated
+    message.success('Case 已保存')
+    caseDrawer.value = false
+    await reload()
+  } catch (e: any) {
+    message.error(e.message || '保存失败')
+  } finally {
+    saving.value = false
+  }
 }
 function openTrace(id: string) {
   router.push(`/app/observability/traces/${id}`)
 }
 
-async function load() {
-  loading.value = true
+async function load(showLoading = true) {
+  const id = String(route.params.id)
+  if (showLoading) loading.value = true
   try {
-    set.value = await getEvalSet(String(route.params.id))
+    const data = await getEvalSet(id)
+    if (String(route.params.id) === id) set.value = data
   } catch (e: any) {
-    set.value = null
-    message.error(e.message || '评测集加载失败')
+    if (String(route.params.id) === id) {
+      if (showLoading) set.value = null
+      message.error(e.message || '评测集加载失败')
+    }
   } finally {
-    loading.value = false
+    if (String(route.params.id) === id) loading.value = false
   }
 }
 async function reload() {
-  await load()
+  await load(false)
+}
+async function saveBinding(data: { app_id?: string; is_release_gate?: boolean }) {
+  if (!set.value || running.value || bindingSaving.value) return
+  bindingSaving.value = true
+  try {
+    await updateEvalSet(set.value.id, data)
+    await reload()
+    message.success('评测集设置已保存')
+  } catch (e: any) {
+    message.error(e.message || '设置保存失败')
+  } finally {
+    bindingSaving.value = false
+  }
+}
+function bindApp(id: string | null) {
+  return saveBinding({ app_id: id || '', ...(!id ? { is_release_gate: false } : {}) })
+}
+function toggleGate(value: boolean) {
+  return saveBinding({ is_release_gate: value })
 }
 function openEdit() {
   if (!set.value) return
@@ -288,13 +392,13 @@ function openEdit() {
   editModal.value = true
 }
 async function saveEdit() {
-  if (!set.value) return
+  if (!set.value || !editSet.name.trim()) return
   saving.value = true
   try {
-    await updateEvalSet(set.value.id, { name: editSet.name, description: editSet.description })
+    await updateEvalSet(set.value.id, { name: editSet.name.trim(), description: editSet.description })
     message.success('已保存')
     editModal.value = false
-    await load()
+    await reload()
   } catch (e: any) {
     message.error(e.message || '保存失败')
   } finally {
@@ -379,7 +483,19 @@ async function exportJsonl() {
   }
 }
 
-onMounted(load)
+watch(() => route.params.id, () => {
+  labelFilter.value = ''
+  caseDrawer.value = false
+  running.value = false
+  void load()
+}, { immediate: true })
+onMounted(async () => {
+  try {
+    apps.value = await listApps()
+  } catch (e: any) {
+    message.error(e.message || '应用列表加载失败')
+  }
+})
 </script>
 
 <style scoped>
@@ -458,6 +574,38 @@ onMounted(load)
   border-radius: 10px;
   padding: 14px 16px;
 }
+.quality-panel {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid #e5e6eb;
+  border-radius: 10px;
+  background: #fff;
+}
+.binding-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.binding-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 340px;
+  max-width: 100%;
+}
+.gate-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+}
+.standard-hint {
+  margin: 8px 0 12px;
+  font-size: 12px;
+  color: #5c6470;
+  line-height: 1.6;
+}
 .list-head {
   display: flex;
   align-items: center;
@@ -491,7 +639,11 @@ onMounted(load)
   border-bottom: 0;
 }
 .case-label {
-  flex: 0 0 52px;
+  flex: 0 0 72px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
   padding-top: 2px;
 }
 .case-main {
@@ -575,6 +727,7 @@ onMounted(load)
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 .drawer-sub {
   font-size: 11px;
@@ -726,6 +879,9 @@ onMounted(load)
   }
   .action-col {
     justify-content: flex-start;
+  }
+  .list-actions {
+    flex-wrap: wrap;
   }
 }
 </style>

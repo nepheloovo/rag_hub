@@ -94,6 +94,17 @@ export interface ChatMessage {
   content: string
   refs: RefItem[]
   created_at: string
+  feedback: FeedbackRating
+}
+
+export type FeedbackRating = 1 | -1 | 0
+export interface MessageFeedbackInput {
+  rating: FeedbackRating
+  comment?: string
+}
+export interface MessageFeedbackResult {
+  ok: boolean
+  rating: FeedbackRating
 }
 
 export interface LogItem {
@@ -126,7 +137,7 @@ export interface LogStats {
 // ---------- 应用 ----------
 export type AppType = 'qa' | 'service' | 'report'
 export type AppKind = 'simple' | 'chatflow' | 'agent'
-export type AppStatus = 'draft' | 'reviewing' | 'published'
+export type AppStatus = 'draft' | 'published' | 'offline'
 
 export interface Application {
   id: string
@@ -135,6 +146,9 @@ export interface Application {
   app_type: AppType
   app_kind: AppKind
   status: AppStatus
+  published_version_id: string | null
+  published_version: number | null
+  draft_dirty: boolean
   version: number
   category: string
   kb_ids: string[]
@@ -163,6 +177,39 @@ export interface AppGenerateDraft {
   system_prompt: string
   opening: string
   suggested_questions: string[]
+}
+
+export interface AppReleaseVersion {
+  id: string
+  version: number
+  release_notes: string
+  fingerprint: string
+  created_by: string
+  created_at: string
+  is_published: boolean
+}
+
+export interface AppReleases {
+  published_version_id: string | null
+  status: AppStatus
+  draft_fingerprint: string
+  draft_dirty: boolean
+  versions: AppReleaseVersion[]
+}
+
+export interface AppReleaseGate {
+  set_id: string
+  set_name: string
+  passed: boolean
+  reason: string
+  latest_run: EvalRunSummary | null
+}
+
+export interface AppReleaseCheck {
+  issues: string[]
+  gates: AppReleaseGate[]
+  can_release: boolean
+  draft_dirty: boolean
 }
 
 export interface StatsOverview {
@@ -321,6 +368,10 @@ export interface EvalCase {
   question: string
   answer: string
   reference_answer: string
+  expected_keywords: string[]
+  forbidden_keywords: string[]
+  require_citations: boolean
+  readiness: 'ready' | 'needs_standard'
   contexts: any[]
   label: 'good' | 'bad'
   status: string
@@ -340,6 +391,10 @@ export interface EvalSetSummary {
   id: string
   name: string
   description: string
+  app_id: string
+  app_name: string
+  is_release_gate: boolean
+  latest_run: EvalRunSummary | null
   created_by: string
   created_at: string
   updated_at: string
@@ -352,6 +407,58 @@ export interface EvalSetSummary {
 
 export interface EvalSetDetail extends EvalSetSummary {
   cases: EvalCase[]
+}
+
+export interface EvalRunResult {
+  case_id: string
+  question: string
+  passed: boolean
+  reasons: string[]
+  output: string
+  refs_count: number
+  simulated: boolean
+}
+
+export interface EvalRunSummary {
+  id: string
+  status: 'running' | 'success' | 'failed'
+  passed_count: number
+  failed_count: number
+  total_count: number
+  done_count: number
+  simulated: boolean
+  created_at: string
+  matches_draft: boolean
+  results: EvalRunResult[]
+}
+
+export type EvalRun = EvalRunSummary
+
+export interface EvalDesignRule {
+  key: string
+  name: string
+  description: string
+  scenes: string[]
+}
+
+export interface EvalDesignRulesResponse {
+  rules: EvalDesignRule[]
+  default_keys: string[]
+}
+
+export interface AiDesignEvalInput {
+  app_id: string
+  set_id?: string
+  set_name?: string
+  rule_keys: string[]
+  directions: string
+  count: number
+}
+
+export interface AiDesignEvalResponse {
+  set: EvalSetSummary
+  cases: EvalCase[]
+  simulated: boolean
 }
 
 export interface EvalOverview {

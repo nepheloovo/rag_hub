@@ -72,6 +72,22 @@
 
       <div class="field-row">
         <div class="field">
+          <label class="label">必须包含关键词</label>
+          <n-dynamic-tags v-model:value="form.expected_keywords" />
+        </div>
+        <div class="field">
+          <label class="label">禁止出现关键词</label>
+          <n-dynamic-tags v-model:value="form.forbidden_keywords" />
+        </div>
+      </div>
+      <div class="standard-row">
+        <label class="label">要求引用</label>
+        <n-switch v-model:value="form.require_citations" aria-label="要求引用" />
+        <n-tag size="tiny" :bordered="false" :type="ready ? 'success' : 'warning'">{{ ready ? '可运行' : '待补标准' }}</n-tag>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
           <label class="label">加入评测集</label>
           <n-select v-model:value="form.set_id" :options="setOptions" placeholder="仅回流到 Case 池" clearable />
         </div>
@@ -102,7 +118,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { CheckmarkCircleOutline, CloseCircleOutline, FlaskOutline } from '@vicons/ionicons5'
-import { createCase, listEvalSets, traceToCase } from '@/api'
+import { createCase, listEvalSets, traceToCase, updateCase } from '@/api'
 import type { EvalSetSummary } from '@/api/types'
 
 const props = withDefaults(
@@ -138,6 +154,9 @@ const form = reactive({
   question: '',
   answer: '',
   reference_answer: '',
+  expected_keywords: [] as string[],
+  forbidden_keywords: [] as string[],
+  require_citations: false,
   tags: [] as string[],
   note: '',
   set_id: null as string | null
@@ -153,6 +172,9 @@ const hint = computed(() => {
 })
 const setOptions = computed(() => sets.value.map(s => ({ label: `${s.name}（${s.case_count}）`, value: s.id })))
 const valid = computed(() => props.mode !== 'manual' || !!form.question.trim())
+const ready = computed(() => !!(props.mode === 'manual' ? form.question.trim() : props.presetQuestion.trim()) && !!(
+  form.reference_answer.trim() || form.expected_keywords.some(k => k.trim()) || form.forbidden_keywords.some(k => k.trim()) || form.require_citations
+))
 
 watch(
   () => props.show,
@@ -162,6 +184,9 @@ watch(
     form.question = props.mode === 'manual' ? '' : props.presetQuestion
     form.answer = props.mode === 'manual' ? '' : props.presetAnswer
     form.reference_answer = ''
+    form.expected_keywords = []
+    form.forbidden_keywords = []
+    form.require_citations = false
     form.tags = []
     form.note = ''
     form.set_id = props.defaultSetId || null
@@ -178,6 +203,11 @@ async function submit() {
   submitting.value = true
   try {
     let result: any
+    const standards = {
+      expected_keywords: form.expected_keywords.map(k => k.trim()).filter(Boolean),
+      forbidden_keywords: form.forbidden_keywords.map(k => k.trim()).filter(Boolean),
+      require_citations: form.require_citations
+    }
     if (props.mode === 'trace' && props.traceId) {
       result = await traceToCase(props.traceId, {
         label: form.label,
@@ -186,12 +216,23 @@ async function submit() {
         reference_answer: form.reference_answer,
         set_id: form.set_id || ''
       })
+      if (standards.expected_keywords.length || standards.forbidden_keywords.length || standards.require_citations) {
+        try {
+          await updateCase(result.case_id, standards)
+        } catch (e: any) {
+          message.error(`Case 已回流，评测标准保存失败，请在 Case 池补充：${e.message || '保存失败'}`)
+          emit('saved', result)
+          emit('update:show', false)
+          return
+        }
+      }
     } else {
       result = await createCase({
         trace_id: props.traceId || undefined,
         question: form.question,
         answer: form.answer,
         reference_answer: form.reference_answer,
+        ...standards,
         label: form.label,
         status: 'confirmed',
         app_id: props.presetAppId || undefined,
@@ -246,6 +287,12 @@ async function submit() {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+.standard-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 .label {
   font-size: 12px;

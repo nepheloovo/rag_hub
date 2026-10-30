@@ -28,6 +28,7 @@ from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.models import User
 from app.services.auth import hash_password
+from app.services.app_release import migrate_app_releases
 from app.services.observability import seed_prices
 from app.services.provider_service import seed_presets
 from app.services.tools import seed_system_tools
@@ -60,6 +61,17 @@ def ensure_schema() -> None:
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_chat_logs_trace_id ON chat_logs (trace_id)")
         )
+        # 新表交给 create_all；已存在的表显式补列，支持直接升级旧数据库。
+        for statement in (
+            "ALTER TABLE applications ADD COLUMN IF NOT EXISTS published_version_id VARCHAR(32)",
+            "ALTER TABLE eval_cases ADD COLUMN IF NOT EXISTS expected_keywords JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE eval_cases ADD COLUMN IF NOT EXISTS forbidden_keywords JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE eval_cases ADD COLUMN IF NOT EXISTS require_citations BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE eval_sets ADD COLUMN IF NOT EXISTS app_id VARCHAR(32) NOT NULL DEFAULT ''",
+            "ALTER TABLE eval_sets ADD COLUMN IF NOT EXISTS is_release_gate BOOLEAN NOT NULL DEFAULT FALSE",
+            "CREATE INDEX IF NOT EXISTS ix_eval_sets_app_id ON eval_sets (app_id)",
+        ):
+            conn.execute(text(statement))
 
 
 @asynccontextmanager
@@ -68,6 +80,7 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     ensure_schema()
     with SessionLocal() as db:
+        migrate_app_releases(db)
         seed_presets(db)
         seed_system_tools(db)
         seed_admin(db)

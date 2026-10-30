@@ -26,6 +26,12 @@
               {{ r.title }}<template v-if="r.page"> · 第 {{ r.page }} 页</template>
             </div>
           </div>
+          <MessageFeedback
+            v-if="m.role === 'assistant' && m.messageId && !m.streaming"
+            v-model:rating="m.feedback"
+            :message-id="m.messageId"
+            :public-app-id="String(route.params.appId)"
+          />
         </div>
       </div>
     </n-scrollbar>
@@ -51,7 +57,8 @@ import { ref, nextTick, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { GridOutline, SendOutline } from '@vicons/ionicons5'
 import { getPublicApp, streamPublicChat } from '@/api'
-import type { RefItem } from '@/api/types'
+import type { AppDoneData, FeedbackRating, RefItem } from '@/api/types'
+import MessageFeedback from '@/components/chat/MessageFeedback.vue'
 
 interface Msg {
   id: string
@@ -59,6 +66,8 @@ interface Msg {
   content: string
   streaming?: boolean
   refs?: RefItem[]
+  messageId?: string
+  feedback?: FeedbackRating
 }
 
 const route = useRoute()
@@ -94,10 +103,12 @@ async function send(text?: string) {
         aiMsg.content += (data as any).text
         scrollToBottom()
       } else if (event === 'done') {
-        const d = data as any
+        const d = data as AppDoneData
         aiMsg.content = d.answer
         aiMsg.streaming = false
         aiMsg.refs = d.refs
+        aiMsg.messageId = d.message_id
+        aiMsg.feedback = 0
       } else if (event === 'error') {
         aiMsg.streaming = false
         aiMsg.content = aiMsg.content || `⚠️ ${(data as any).message}`
@@ -107,6 +118,7 @@ async function send(text?: string) {
     aiMsg.streaming = false
     if (!aiMsg.content) aiMsg.content = `⚠️ ${e.message}`
   } finally {
+    aiMsg.streaming = false
     sending.value = false
     scrollToBottom()
   }

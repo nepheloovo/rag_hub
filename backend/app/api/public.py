@@ -7,22 +7,25 @@ from sqlalchemy.orm import Session
 
 from app.api.apps import app_chat_response
 from app.database import get_db
-from app.models import Application, ChatLog
+from app.models import Application, ChatLog, Conversation, Message
 from app.schemas.application import AppChatRequest
+from app.schemas.chat import FeedbackRequest
+from app.services.app_release import runtime_app
+from app.services.feedback import save_feedback
 
 router = APIRouter(prefix="/public/apps", tags=["公开访问"])
 
 
 def _published_app(db: Session, app_id: str) -> Application:
     app = db.get(Application, app_id)
-    if not app or app.status != "published" or not app.publish_enabled:
+    if not app or app.status != "published" or not app.publish_enabled or not app.published_version_id:
         raise HTTPException(status_code=404, detail="应用未发布或不存在")
     return app
 
 
 @router.get("/{app_id}")
 def public_app_info(app_id: str, db: Session = Depends(get_db)):
-    app = _published_app(db, app_id)
+    app = runtime_app(db, _published_app(db, app_id), public=True)
     return {
         "id": app.id,
         "name": app.name,
@@ -49,7 +52,24 @@ def public_chat(app_id: str, req: AppChatRequest, db: Session = Depends(get_db))
         if used >= app.visitor_daily_limit:
             raise HTTPException(status_code=429, detail="该应用今日访客对话次数已达上限")
     req.role = "访客"
-    return app_chat_response(app_id, req, source="public")
+    req.draft = False
+    application = runtime_app(db, app, public=True)
+    return app_chat_response(app_id, req, source="public", application=application)
+
+
+@router.post("/{app_id}/messages/{message_id}/feedback")
+def public_feedback(
+    app_id: str,
+    message_id: str,
+    data: FeedbackRequest,
+    db: Session = Depends(get_db),
+):
+    _published_app(db, app_id)
+    message = db.get(Message, message_id)
+    conversation = db.get(Conversation, message.conv_id) if message else None
+    if not conversation or conversation.app_id != app_id:
+        raise HTTPException(status_code=404, detail="回答不存在")
+    return save_feedback(db, message_id, "visitor", data.rating, data.comment)
 
 
 @router.get("/{app_id}/visitor-stats")

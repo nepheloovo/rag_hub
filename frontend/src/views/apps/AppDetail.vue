@@ -13,19 +13,26 @@
               {{ kindLabel }}
             </n-tag>
             <n-tag v-if="app" size="small" :bordered="false" :type="statusTagType">
-              {{ statusLabel(app.status) }} · v{{ app.version }}
+              {{ releaseStatusLabel }}
             </n-tag>
+            <n-tag v-if="canManage && app?.draft_dirty" size="small" type="warning" :bordered="false">草稿有未发布修改</n-tag>
           </div>
           <p class="page-desc">{{ app?.description || '暂无描述' }}</p>
         </div>
       </div>
-      <n-button v-if="canManage && app" type="error" secondary size="small" @click="removeApp">
+      <n-space v-if="canManage && app" :size="8">
+        <n-button type="primary" size="small" :disabled="saving || configDirty" @click="openRelease">发布</n-button>
+        <n-button v-if="app.status === 'published'" size="small" :loading="unpublishing" @click="confirmUnpublish">下线</n-button>
+        <n-button type="error" secondary size="small" @click="removeApp">
         删除应用
-      </n-button>
+        </n-button>
+      </n-space>
     </div>
 
+    <n-alert v-if="canManage && configDirty" type="warning" :bordered="false" class="unsaved-hint">配置有未保存修改，调试与评测以已保存草稿为准。请先保存配置再发布。</n-alert>
+
     <n-tabs v-model:value="activeTab" type="line" animated style="margin-top: -6px">
-      <n-tab-pane name="chat" tab="对话">
+      <n-tab-pane name="chat" :tab="canManage ? '调试对话' : '对话'">
         <div class="chat-wrap">
           <!-- 会话列表 -->
           <div class="conv-panel">
@@ -56,6 +63,7 @@
                   <component :is="typeIcon" />
                 </n-icon>
                 <span class="toolbar-name">{{ app?.name }}</span>
+                <n-tag v-if="canManage" size="tiny" :bordered="false" type="warning">当前草稿</n-tag>
                 <n-tag size="tiny" :bordered="false" type="info">{{ currentModelLabel }}</n-tag>
               </div>
               <span class="conv-status">
@@ -147,7 +155,15 @@
       </n-tab-pane>
 
       <n-tab-pane v-if="canManage" name="flow" tab="编排">
-        <FlowEditor :app-id="route.params.id as string" />
+        <FlowEditor :app-id="route.params.id as string" @saved="onDraftSaved" @debug="activeTab = 'chat'" />
+      </n-tab-pane>
+
+      <n-tab-pane v-if="canManage" name="eval" tab="评测" display-directive="show:lazy">
+        <AppEvalPanel :app-id="route.params.id as string" @changed="refreshApp" />
+      </n-tab-pane>
+
+      <n-tab-pane v-if="canManage" name="versions" tab="版本" display-directive="show:lazy">
+        <VersionsPanel :app-id="route.params.id as string" :refresh-key="releaseRefresh" @changed="onReleaseChanged" />
       </n-tab-pane>
 
       <n-tab-pane v-if="canManage" name="config" tab="配置">
@@ -169,24 +185,14 @@
                 ]"
               />
             </n-form-item>
-            <n-form-item label="发布状态">
-              <n-select
-                v-model:value="form.status"
-                :options="[
-                  { label: '草稿', value: 'draft' },
-                  { label: '评测中', value: 'reviewing' },
-                  { label: '已发布', value: 'published' }
-                ]"
-              />
-            </n-form-item>
             <n-form-item label="业务分类">
               <n-select
                 v-model:value="form.category"
                 :options="['报告撰写', '智能客服', '制度与合同审校', '营销内容', '办公提效'].map(c => ({ label: c, value: c }))"
               />
             </n-form-item>
-            <n-form-item label="当前版本">
-              <span class="field-hint">v{{ app?.version || 1 }}（每次保存自动 +1）</span>
+            <n-form-item label="线上版本">
+              <span class="field-hint">{{ releaseStatusLabel }}，保存仅更新草稿</span>
             </n-form-item>
             <n-form-item label="绑定知识库">
               <n-select
@@ -269,6 +275,9 @@
                 <n-input :value="embedCode" readonly type="textarea" :autosize="{ minRows: 2, maxRows: 3 }" />
               </div>
             </n-form-item>
+            <n-form-item label="访客日限额">
+              <n-input-number v-model:value="form.visitor_daily_limit" :min="0" :precision="0" style="width: 180px" />
+            </n-form-item>
             <n-form-item label="企业微信">
               <span class="field-hint">接入配置规划中（需企业微信自建应用，后续版本开放）</span>
             </n-form-item>
@@ -280,11 +289,12 @@
         </div>
       </n-tab-pane>
     </n-tabs>
+    <ReleaseDialog v-if="app && canManage" v-model:show="releaseDialog" :app-id="app.id" @published="onReleaseChanged" @eval="activeTab = 'eval'" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, nextTick, onMounted, markRaw } from 'vue'
+import { ref, computed, reactive, nextTick, onMounted, markRaw, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage, useDialog } from 'naive-ui'
 import {
@@ -303,11 +313,15 @@ import {
   listKbs,
   listProviders,
   streamAppChat,
-  updateApp
+  updateApp,
+  unpublishApp
 } from '@/api'
-import type { AppKind, AppStatus, Application, ChatMessage, Conversation, KnowledgeBase, Provider, RefItem } from '@/api/types'
+import type { AppKind, Application, Conversation, KnowledgeBase, Provider, RefItem } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
 import FlowEditor from './FlowEditor.vue'
+import ReleaseDialog from '@/components/release/ReleaseDialog.vue'
+import AppEvalPanel from '@/components/release/AppEvalPanel.vue'
+import VersionsPanel from '@/components/release/VersionsPanel.vue'
 
 interface Msg {
   id: string
@@ -329,6 +343,9 @@ const kbs = ref<KnowledgeBase[]>([])
 const providers = ref<Provider[]>([])
 const activeTab = ref('chat')
 const canManage = computed(() => ['platform_admin', 'app_developer', 'kb_admin'].includes(auth.role!))
+const releaseDialog = ref(false)
+const unpublishing = ref(false)
+const releaseRefresh = ref(0)
 
 // 类型元信息
 const typeMap: Record<string, { label: string; color: string; bg: string; icon: any }> = {
@@ -344,10 +361,14 @@ const kindLabel = computed(() => {
   const m: Record<string, string> = { simple: '简易', chatflow: 'Chat Flow', agent: 'Agent' }
   return app.value ? m[app.value.app_kind] || '简易' : '简易'
 })
-const statusLabel = (s: string) => ({ draft: '草稿', reviewing: '评测中', published: '已发布' } as any)[s] || s
+const releaseStatusLabel = computed(() => {
+  if (app.value?.status === 'offline') return '已下线'
+  if (app.value?.status === 'published' && app.value.published_version != null) return `线上 v${app.value.published_version}`
+  return '未发布'
+})
 const statusTagType = computed(() => {
   if (!app.value) return 'default'
-  return app.value.status === 'published' ? 'success' : app.value.status === 'reviewing' ? 'warning' : 'default'
+  return app.value.status === 'published' ? 'success' : app.value.status === 'offline' ? 'warning' : 'default'
 })
 
 // 对话
@@ -370,7 +391,6 @@ const form = reactive({
   name: '',
   description: '',
   app_kind: 'simple' as AppKind,
-  status: 'draft' as AppStatus,
   category: '办公提效',
   kb_ids: [] as string[],
   llm_ref: '' as string | null,
@@ -381,9 +401,12 @@ const form = reactive({
   suggested_questions: [] as string[],
   fallback_reply: '',
   transfer_hint: '',
-  publish_enabled: false
+  publish_enabled: false,
+  visitor_daily_limit: 100 as number | null
 })
 const saving = ref(false)
+const savedConfig = ref('')
+const configDirty = computed(() => !!savedConfig.value && JSON.stringify(form) !== savedConfig.value)
 
 const publicUrl = computed(() => `${location.origin}/pub/${route.params.id}`)
 const embedCode = computed(() => `<iframe src="${publicUrl.value}" style="width:100%;height:600px;border:0;border-radius:12px"></iframe>`)
@@ -416,8 +439,8 @@ async function loadApp() {
   try {
     const [appData, kbList, pvList] = await Promise.all([
       getApp(route.params.id as string),
-      listKbs(),
-      listProviders()
+      canManage.value ? listKbs() : Promise.resolve([]),
+      canManage.value ? listProviders() : Promise.resolve([])
     ])
     app.value = appData
     kbs.value = kbList
@@ -432,7 +455,6 @@ function fillForm(a: Application) {
   form.name = a.name
   form.description = a.description
   form.app_kind = a.app_kind
-  form.status = a.status
   form.category = a.category
   form.kb_ids = [...a.kb_ids]
   form.llm_ref = a.llm_ref || null
@@ -444,6 +466,44 @@ function fillForm(a: Application) {
   form.fallback_reply = a.fallback_reply
   form.transfer_hint = a.transfer_hint
   form.publish_enabled = !!a.publish_enabled
+  form.visitor_daily_limit = a.visitor_daily_limit
+  savedConfig.value = JSON.stringify(form)
+}
+
+function onDraftSaved(updated: Application) {
+  const dirty = configDirty.value
+  app.value = updated
+  if (!dirty) fillForm(updated)
+  releaseRefresh.value++
+}
+function onReleaseChanged(updated: Application) {
+  onDraftSaved(updated)
+  messages.value = []
+  activeConvId.value = null
+}
+async function refreshApp() {
+  try { onDraftSaved(await getApp(route.params.id as string)) }
+  catch (e: any) { message.error(e.message || '应用状态刷新失败') }
+}
+function openRelease() {
+  if (configDirty.value) { activeTab.value = 'config'; message.warning('请先保存配置'); return }
+  releaseDialog.value = true
+}
+function confirmUnpublish() {
+  if (!app.value || unpublishing.value) return
+  dialog.warning({
+    title: '下线应用',
+    content: '下线后，工作台与公开链接将无法使用此应用。发布版本保留，可重新上线。',
+    positiveText: '确认下线', negativeText: '取消',
+    onPositiveClick: async () => {
+      unpublishing.value = true
+      try {
+        onReleaseChanged(await unpublishApp(app.value!.id))
+        message.success('应用已下线')
+      } catch (e: any) { message.error(e.message || '下线失败'); return false }
+      finally { unpublishing.value = false }
+    }
+  })
 }
 
 async function loadConversations() {
@@ -501,7 +561,8 @@ async function send(text?: string) {
     for await (const { event, data } of streamAppChat(route.params.id as string, {
       query: content,
       role: auth.role ?? 'business_user',
-      conversation_id: activeConvId.value
+      conversation_id: activeConvId.value,
+      draft: canManage.value
     })) {
       if (event === 'delta') {
         const d = data as { text: string }
@@ -541,7 +602,6 @@ async function saveConfig() {
       name: form.name,
       description: form.description,
       app_kind: form.app_kind,
-      status: form.status,
       category: form.category,
       kb_ids: form.kb_ids,
       llm_ref: form.llm_ref || '',
@@ -552,11 +612,13 @@ async function saveConfig() {
       suggested_questions: form.suggested_questions,
       fallback_reply: form.fallback_reply,
       transfer_hint: form.transfer_hint,
-      publish_enabled: form.publish_enabled
+      publish_enabled: form.publish_enabled,
+      visitor_daily_limit: form.visitor_daily_limit ?? 0
     })
     app.value = updated
     fillForm(updated)
-    message.success('配置已保存（版本 +1）')
+    releaseRefresh.value++
+    message.success('草稿配置已保存')
   } catch (e: any) {
     message.error(e.message)
   } finally {
@@ -587,6 +649,9 @@ onMounted(async () => {
   await loadApp()
   await loadConversations()
 })
+watch(() => route.query.tab, tab => {
+  if (typeof tab === 'string' && ['chat', 'flow', 'config', 'eval', 'versions'].includes(tab) && (canManage.value || tab === 'chat')) activeTab.value = tab
+}, { immediate: true })
 </script>
 
 <style scoped>
@@ -595,18 +660,23 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
+.unsaved-hint { margin-bottom: 14px; }
 
 .head-left {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
 .title-row {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .page-title {

@@ -71,7 +71,7 @@
                   {{ kindMeta[app.app_kind]?.label }}
                 </n-tag>
               </div>
-              <div class="app-time">{{ statusLabel(app.status) }} · v{{ app.version }} · {{ app.category }}</div>
+              <div class="app-time">{{ statusLabel(app.status) }}<template v-if="app.published_version != null"> · v{{ app.published_version }}</template> · {{ app.category }}</div>
             </div>
           </div>
           <div class="app-desc">{{ app.description || '暂无描述' }}</div>
@@ -234,7 +234,7 @@ const filteredApps = computed(() =>
   })
 )
 
-const statusLabel = (s: string) => ({ draft: '草稿', reviewing: '评测中', published: '已发布' } as any)[s] || s
+const statusLabel = (s: string) => ({ draft: '草稿', offline: '已下线', published: '已发布' } as Record<string, string>)[s] || s
 
 const kbOptions = computed(() => kbs.value.map(k => ({ label: k.name, value: k.id })))
 

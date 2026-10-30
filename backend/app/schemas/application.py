@@ -9,7 +9,7 @@ class ApplicationCreate(BaseModel):
     description: str = ""
     app_type: str = "qa"  # qa / service / report
     app_kind: str = "simple"  # simple / chatflow / agent
-    status: str = "draft"  # draft / reviewing / published
+    status: str = "draft"  # 创建时仅允许草稿，发布通过专用接口
     category: str = "办公提效"
     kb_ids: list[str] = Field(default_factory=list)
 
@@ -41,6 +41,9 @@ class ApplicationOut(BaseModel):
     app_type: str
     app_kind: str
     status: str
+    published_version_id: Optional[str] = None
+    published_version: Optional[int] = None
+    draft_dirty: bool = True
     version: int
     category: str
     kb_ids: list[str]
@@ -76,3 +79,12 @@ class AppChatRequest(BaseModel):
     query: str
     role: str = "user"
     conversation_id: Optional[str] = None
+    draft: bool = False
+
+
+class AppReleaseRequest(BaseModel):
+    release_notes: str = ""
+
+
+class AppRollbackRequest(BaseModel):
+    version_id: str = Field(min_length=1)

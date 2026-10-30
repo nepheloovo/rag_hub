@@ -76,10 +76,12 @@
                 <div class="set-title-line">
                   <span class="set-name">{{ set.name }}</span>
                   <n-tag size="tiny" :bordered="false">{{ set.case_count }} 条 Case</n-tag>
+                  <n-tag v-if="set.is_release_gate" size="tiny" :bordered="false" type="warning">发布门禁</n-tag>
                 </div>
                 <div class="set-desc">{{ set.description || '暂无描述' }}</div>
                 <div class="set-meta">
-                  <span>{{ set.apps?.length ? set.apps.join(' · ') : '未关联应用' }}</span>
+                  <span>{{ set.app_name || '未绑定应用' }}</span>
+                  <span v-if="set.latest_run">最近 {{ set.latest_run.passed_count }}/{{ set.latest_run.total_count }} 通过{{ set.latest_run.matches_draft ? '' : ' · 草稿已变更' }}</span>
                   <span class="dot"></span>
                   <span>更新于 {{ formatDate(set.updated_at) }}</span>
                   <span v-if="set.tags?.length" class="set-tags">
@@ -110,12 +112,15 @@
     </n-tabs>
 
     <!-- Case 详情 / 编辑抽屉 -->
-    <n-drawer v-model:show="caseDrawer" :width="620" placement="right">
+    <n-drawer v-model:show="caseDrawer" :width="620" style="max-width: 100vw" placement="right">
       <n-drawer-content v-if="activeCase" closable>
         <template #header>
           <div class="drawer-head">
             <n-tag size="small" :bordered="false" :type="activeCase.label === 'good' ? 'success' : 'error'">
               {{ activeCase.label === 'good' ? 'Good Case' : 'Bad Case' }}
+            </n-tag>
+            <n-tag size="tiny" :bordered="false" :type="activeCase.readiness === 'ready' ? 'success' : 'warning'">
+              {{ activeCase.readiness === 'ready' ? '可运行' : '待补标准' }}
             </n-tag>
             <span class="drawer-sub">{{ sourceLabel(activeCase.source) }} · {{ formatDate(activeCase.created_at) }}</span>
           </div>
@@ -133,6 +138,21 @@
           <div class="field">
             <label class="label">期望回答（评测基线）</label>
             <n-input v-model:value="editForm.reference_answer" type="textarea" :autosize="{ minRows: 3, maxRows: 6 }" placeholder="用于后续回归对比" />
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label class="label">必须包含关键词</label>
+              <n-dynamic-tags v-model:value="editForm.expected_keywords" />
+            </div>
+            <div class="field">
+              <label class="label">禁止出现关键词</label>
+              <n-dynamic-tags v-model:value="editForm.forbidden_keywords" />
+            </div>
+          </div>
+          <div class="field">
+            <label class="label">要求引用</label>
+            <n-switch v-model:value="editForm.require_citations" aria-label="要求引用" style="align-self: flex-start" />
+            <span class="standard-hint">填写期望回答、关键词或引用要求后，Case 才能参与评测。</span>
           </div>
           <div class="field-row">
             <div class="field">
@@ -271,7 +291,8 @@ const statusOptions = [
 const sourceOptions = [
   { label: '链路回流', value: 'trace' },
   { label: '日志回流', value: 'log' },
-  { label: '手工录入', value: 'manual' }
+  { label: '手工录入', value: 'manual' },
+  { label: 'AI 设计', value: 'ai' }
 ]
 const setOptions = computed(() => sets.value.map(s => ({ label: `${s.name}（${s.case_count}）`, value: s.id })))
 
@@ -319,6 +340,14 @@ const columns: DataTableColumns<EvalCase> = [
       ])
   },
   {
+    title: '评测标准',
+    key: 'readiness',
+    width: 100,
+    render: row => h(NTag, { size: 'tiny', bordered: false, type: row.readiness === 'ready' ? 'success' : 'warning' }, {
+      default: () => row.readiness === 'ready' ? '可运行' : '待补标准'
+    })
+  },
+  {
     title: '应用',
     key: 'app_name',
     width: 120,
@@ -361,6 +390,9 @@ const activeCase = ref<EvalCase | null>(null)
 const editForm = reactive({
   question: '',
   reference_answer: '',
+  expected_keywords: [] as string[],
+  forbidden_keywords: [] as string[],
+  require_citations: false,
   label: 'good',
   status: 'confirmed',
   note: '',
@@ -378,6 +410,9 @@ function openCase(row: EvalCase) {
   activeCase.value = row
   editForm.question = row.question
   editForm.reference_answer = row.reference_answer
+  editForm.expected_keywords = [...(row.expected_keywords || [])]
+  editForm.forbidden_keywords = [...(row.forbidden_keywords || [])]
+  editForm.require_citations = row.require_citations || false
   editForm.label = row.label
   editForm.status = row.status || 'confirmed'
   editForm.note = row.note
@@ -391,6 +426,9 @@ async function saveCase() {
     const updated = await updateCase(activeCase.value.id, {
       question: editForm.question,
       reference_answer: editForm.reference_answer,
+      expected_keywords: editForm.expected_keywords.map(k => k.trim()).filter(Boolean),
+      forbidden_keywords: editForm.forbidden_keywords.map(k => k.trim()).filter(Boolean),
+      require_citations: editForm.require_citations,
       label: editForm.label,
       status: editForm.status,
       note: editForm.note,
@@ -420,7 +458,7 @@ function openTrace(id: string) {
   router.push(`/app/observability/traces/${id}`)
 }
 function sourceLabel(source: string) {
-  return ({ trace: '链路回流', log: '日志回流', manual: '手工录入' } as Record<string, string>)[source] || source
+  return ({ trace: '链路回流', log: '日志回流', manual: '手工录入', ai: 'AI 设计' } as Record<string, string>)[source] || source
 }
 function formatDate(iso: string) {
   const d = new Date(iso)
@@ -796,6 +834,7 @@ onMounted(reload)
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 .drawer-sub {
   font-size: 11px;
@@ -870,12 +909,20 @@ onMounted(reload)
   border-radius: 7px;
   padding: 8px 10px;
 }
+.standard-hint {
+  color: #5c6470;
+  font-size: 12px;
+  line-height: 1.6;
+}
 @media (max-width: 760px) {
   .page-head {
     flex-direction: column;
   }
   .set-stats {
     display: none;
+  }
+  .field-row {
+    grid-template-columns: 1fr;
   }
 }
 

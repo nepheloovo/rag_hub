@@ -10,17 +10,24 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, get_db
 from app.config import settings
-from app.api.deps import require_roles
-from app.models import Application, ChatLog, Conversation, KnowledgeBase, Message
+from app.api.deps import get_current_user, require_roles
+from app.models import Application, AuditLog, ChatLog, Conversation, KnowledgeBase, Message, User
+from app.models.application import AppVersion
 from app.schemas.application import (
     AppChatRequest,
     AppGenerateRequest,
     AppRestoreRequest,
+    AppReleaseRequest,
+    AppRollbackRequest,
     ApplicationCreate,
     ApplicationOut,
     ApplicationUpdate,
 )
 from app.services.app_templates import get_template
+from app.services.app_release import (
+    BUILDER_ROLES, app_fingerprint, draft_dirty, published_version, release_check,
+    runtime_app, snapshot_app,
+)
 from app.services.chat import build_llm, format_contexts, format_history, stream_answer
 from app.services.observability import TraceRecorder, chunk_payload, explain_error, finish_trace_error
 from app.services.retrieval import retrieve
@@ -30,7 +37,7 @@ router = APIRouter(prefix="/apps", tags=["应用"])
 HISTORY_MESSAGES = 6
 
 KIND_LABELS = {"simple": "简易应用", "chatflow": "Chat Flow", "agent": "Agent"}
-STATUS_LABELS = {"draft": "草稿", "reviewing": "评测中", "published": "已发布"}
+STATUS_LABELS = {"draft": "草稿", "offline": "已下线", "published": "已发布"}
 
 
 def _sse(event: str, data: dict) -> str:
@@ -52,12 +59,20 @@ def _call_count_7d(db: Session, app_id: str) -> int:
     )
 
 
+def _app_out(db: Session, app: Application) -> ApplicationOut:
+    out = ApplicationOut.model_validate(app)
+    version = published_version(db, app)
+    out.published_version = version.version if version else None
+    out.draft_dirty = draft_dirty(db, app)
+    return out
+
+
 @router.get("", response_model=list[ApplicationOut])
 def list_apps(db: Session = Depends(get_db)):
     apps = db.query(Application).order_by(Application.created_at.desc()).all()
     result = []
     for app in apps:
-        out = ApplicationOut.model_validate(app)
+        out = _app_out(db, app)
         out.call_count_7d = _call_count_7d(db, app.id)
         result.append(out)
     return result
@@ -135,8 +150,8 @@ def create_app(data: ApplicationCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=422, detail="应用类型必须是 qa / service / report")
     if data.app_kind not in ("simple", "chatflow", "agent"):
         raise HTTPException(status_code=422, detail="应用形态必须是 simple / chatflow / agent")
-    if data.status not in ("draft", "reviewing", "published"):
-        raise HTTPException(status_code=422, detail="状态必须是 draft / reviewing / published")
+    if data.status != "draft":
+        raise HTTPException(status_code=422, detail="新应用只能创建为草稿，请通过发布接口上线")
     if data.category not in ("报告撰写", "智能客服", "制度与合同审校", "营销内容", "办公提效"):
         data.category = "办公提效"
     # 校验知识库存在
@@ -164,17 +179,19 @@ def create_app(data: ApplicationCreate, db: Session = Depends(get_db)):
     db.add(app)
     db.commit()
     db.refresh(app)
-    return app
+    return _app_out(db, app)
 
 
 @router.get("/{app_id}", response_model=ApplicationOut)
 def get_app(app_id: str, db: Session = Depends(get_db)):
-    return _get_app(db, app_id)
+    return _app_out(db, _get_app(db, app_id))
 
 
 @router.put("/{app_id}", response_model=ApplicationOut, dependencies=[Depends(require_roles("platform_admin", "app_developer", "kb_admin"))])
 def update_app(app_id: str, data: ApplicationUpdate, db: Session = Depends(get_db)):
     app = _get_app(db, app_id)
+    if "status" in data.model_fields_set:
+        raise HTTPException(status_code=422, detail="请通过发布、回滚或下线接口修改状态")
     payload = data.model_dump(exclude_none=True)
     flow_update = payload.pop("flow", None)
     for field, value in payload.items():
@@ -191,7 +208,110 @@ def update_app(app_id: str, data: ApplicationUpdate, db: Session = Depends(get_d
         app.flow_history = history
     db.commit()
     db.refresh(app)
+    return _app_out(db, app)
+
+
+@router.get("/{app_id}/releases")
+def list_releases(app_id: str, db: Session = Depends(get_db)):
+    app = _get_app(db, app_id)
+    versions = db.query(AppVersion).filter(AppVersion.app_id == app_id).order_by(
+        AppVersion.version.desc()
+    ).all()
+    return {
+        "published_version_id": app.published_version_id, "status": app.status,
+        "draft_fingerprint": app_fingerprint(app), "draft_dirty": draft_dirty(db, app),
+        "versions": [{
+            "id": v.id, "version": v.version, "release_notes": v.release_notes,
+            "fingerprint": v.fingerprint, "created_by": v.created_by, "created_at": v.created_at,
+            "is_published": v.id == app.published_version_id,
+        } for v in versions],
+    }
+
+
+@router.get("/{app_id}/release-check")
+def check_release(app_id: str, db: Session = Depends(get_db)):
+    return release_check(db, _get_app(db, app_id))
+
+
+def _locked_app(db: Session, app_id: str) -> Application:
+    # 串行分配版本号，避免同一应用并发发布生成重复版本。
+    app = db.query(Application).filter(Application.id == app_id).with_for_update().first()
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
     return app
+
+
+def _release_audit(db: Session, user: User, action: str, app_id: str, detail: str = ""):
+    db.add(AuditLog(
+        id=uuid.uuid4().hex, actor=user.username, role=user.role,
+        action=action, target=app_id, detail=detail,
+    ))
+    db.commit()
+
+
+@router.post("/{app_id}/release", response_model=ApplicationOut)
+def release_app(
+    app_id: str, req: AppReleaseRequest, db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*BUILDER_ROLES)),
+):
+    app = _locked_app(db, app_id)
+    check = release_check(db, app)
+    if check["issues"]:
+        raise HTTPException(status_code=422, detail={
+            "message": "草稿校验未通过", "issues": check["issues"],
+        })
+    failures = [f"「{g['set_name']}」：{g['reason']}" for g in check["gates"] if not g["passed"]]
+    if failures:
+        raise HTTPException(status_code=409, detail="发布质量门禁未通过：" + "；".join(failures))
+    latest = db.query(AppVersion).filter(AppVersion.app_id == app_id).order_by(
+        AppVersion.version.desc()
+    ).first()
+    fingerprint = app_fingerprint(app)
+    if not latest or latest.fingerprint != fingerprint:
+        latest = AppVersion(
+            id=uuid.uuid4().hex, app_id=app_id, version=(latest.version if latest else 0) + 1,
+            snapshot=snapshot_app(app), fingerprint=fingerprint,
+            release_notes=req.release_notes, created_by=user.display_name or user.username,
+        )
+        db.add(latest)
+    app.published_version_id = latest.id
+    app.status = "published"
+    # 审计与状态切换一起提交，校验或门禁失败时不会留下版本。
+    _release_audit(db, user, "application.published", app_id, detail=json.dumps({
+        "version_id": latest.id, "version": latest.version,
+    }, ensure_ascii=False))
+    db.refresh(app)
+    return _app_out(db, app)
+
+
+@router.post("/{app_id}/rollback", response_model=ApplicationOut)
+def rollback_app(
+    app_id: str, req: AppRollbackRequest, db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*BUILDER_ROLES)),
+):
+    app = _locked_app(db, app_id)
+    version = db.get(AppVersion, req.version_id)
+    if not version or version.app_id != app_id:
+        raise HTTPException(status_code=404, detail="发布版本不存在")
+    app.published_version_id = version.id
+    app.status = "published"
+    _release_audit(db, user, "application.rolled_back", app_id, detail=json.dumps({
+        "version_id": version.id, "version": version.version,
+    }, ensure_ascii=False))
+    db.refresh(app)
+    return _app_out(db, app)
+
+
+@router.post("/{app_id}/unpublish", response_model=ApplicationOut)
+def unpublish_app(
+    app_id: str, db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*BUILDER_ROLES)),
+):
+    app = _locked_app(db, app_id)
+    app.status = "offline"
+    _release_audit(db, user, "application.unpublished", app_id)
+    db.refresh(app)
+    return _app_out(db, app)
 
 
 @router.get("/{app_id}/versions")
@@ -215,7 +335,7 @@ def restore_version(app_id: str, req: AppRestoreRequest, db: Session = Depends(g
     app.flow_history = history
     db.commit()
     db.refresh(app)
-    return app
+    return _app_out(db, app)
 
 
 @router.delete("/{app_id}", status_code=204, dependencies=[Depends(require_roles("platform_admin", "app_developer", "kb_admin"))])
@@ -236,7 +356,8 @@ def _stream_text_chunks(text: str, size: int = 12):
 
 
 def app_chat_response(
-    app_id: str, req: AppChatRequest, source: str = "internal"
+    app_id: str, req: AppChatRequest, source: str = "internal",
+    application: Application | None = None,
 ) -> StreamingResponse:
     """应用级对话核心（简易 / Chat Flow / Agent 形态统一入口），供内部与公开路由复用"""
     if not req.query.strip():
@@ -245,9 +366,15 @@ def app_chat_response(
     db = SessionLocal()
     trace_id = ""
     try:
-        app = db.get(Application, app_id)
-        if not app:
+        stored = db.get(Application, app_id)
+        if not stored:
             raise HTTPException(status_code=404, detail="应用不存在")
+        app = application if application is not None else runtime_app(
+            db, stored, draft=req.draft, builder=source == "eval", public=source == "public",
+        )
+        if app.id != app_id:
+            raise HTTPException(status_code=404, detail="应用不存在")
+        execution_snapshot = snapshot_app(app)
         # 校验绑定的知识库均存在
         for kb_id in app.kb_ids:
             if not db.get(KnowledgeBase, kb_id):
@@ -463,7 +590,7 @@ def app_chat_response(
                 # Agent：LLM 函数调用规划 Tool/Skill，流式输出（rec 记录 ReAct 每一步）
                 from app.services.agent import run_agent
 
-                app_obj = gen_db.get(Application, app_meta["app_id"])
+                app_obj = Application(id=app_id, **execution_snapshot)
                 contexts = ""
                 if outcome:
                     if app_meta["show_refs"]:
@@ -485,12 +612,12 @@ def app_chat_response(
                     answer_parts.append(piece)
                     yield _sse("delta", {"text": piece})
                 model_name = (rec.trace.model if rec else "") or "agent"
-                is_fake = False
+                is_fake = bool(rec and (rec.trace.models or {}).get("fake"))
             elif app_meta["is_chatflow"]:
                 # 执行 Chat Flow（LLM/HTTP 工具同步生成，最终文本流式输出）
                 from app.services.flow import run_chatflow
 
-                app_obj = gen_db.get(Application, app_meta["app_id"])
+                app_obj = Application(id=app_id, **execution_snapshot)
                 answer_text, flow_refs, _vars = run_chatflow(
                     gen_db, app_obj, req.query, rec=rec
                 )
@@ -500,7 +627,7 @@ def app_chat_response(
                     answer_parts.append(piece)
                     yield _sse("delta", {"text": piece})
                 model_name = (rec.trace.model if rec else "") or "chatflow"
-                is_fake = False
+                is_fake = bool(rec and (rec.trace.models or {}).get("fake"))
             else:
                 if app_meta["show_refs"] and outcome:
                     for item in outcome.chunks[:5]:
@@ -703,6 +830,12 @@ def app_chat_response(
 
 
 @router.post("/{app_id}/chat")
-def chat_app(app_id: str, req: AppChatRequest):
+def chat_app(
+    app_id: str, req: AppChatRequest, db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """内部应用对话路由"""
-    return app_chat_response(app_id, req)
+    app = runtime_app(
+        db, _get_app(db, app_id), draft=req.draft, builder=user.role in BUILDER_ROLES,
+    )
+    return app_chat_response(app_id, req, application=app)

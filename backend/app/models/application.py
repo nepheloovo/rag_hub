@@ -1,14 +1,14 @@
-"""应用模型：简易(simple) / Chat Flow(chatflow) / Agent(agent)，草稿→评测中→已发布"""
+"""应用草稿与不可变的发布版本"""
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 
 APP_KINDS = ("simple", "chatflow", "agent")
-APP_STATUSES = ("draft", "reviewing", "published")
+APP_STATUSES = ("draft", "published", "offline")
 APP_CATEGORIES = ("报告撰写", "智能客服", "制度与合同审校", "营销内容", "办公提效")
 
 
@@ -22,8 +22,9 @@ class Application(Base):
     app_type: Mapped[str] = mapped_column(String(16), nullable=False, default="qa", index=True)
     # 应用形态：simple / chatflow / agent
     app_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="simple", index=True)
-    # 发布状态：draft / reviewing / published
+    # 发布状态：draft / published / offline；编辑仅修改草稿
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", index=True)
+    published_version_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     # 业务场景分类
     category: Mapped[str] = mapped_column(String(32), default="办公提效", index=True)
@@ -51,3 +52,19 @@ class Application(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class AppVersion(Base):
+    __tablename__ = "app_versions"
+    __table_args__ = (UniqueConstraint("app_id", "version", name="uq_app_release_version"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    app_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("applications.id", ondelete="CASCADE"), index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    release_notes: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -7,10 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_current_user
 from app.database import SessionLocal, get_db
-from app.models import ChatLog, Chunk, Conversation, Document, KnowledgeBase, Message
-from app.schemas.chat import ChatRequest, ConversationCreate
+from app.models import ChatLog, Chunk, Conversation, Document, KnowledgeBase, Message, User
+from app.schemas.chat import ChatRequest, ConversationCreate, FeedbackRequest
 from app.services.chat import DEFAULT_SYSTEM_PROMPT, format_contexts, format_history, stream_answer
+from app.services.feedback import message_dicts, save_feedback
 from app.services.observability import TraceRecorder, chunk_payload, explain_error, finish_trace_error
 from app.services.retrieval import retrieve
 
@@ -55,16 +57,31 @@ def create_conversation(data: ConversationCreate, db: Session = Depends(get_db))
 
 
 @router.get("/conversations/{conv_id}/messages")
-def list_messages(conv_id: str, db: Session = Depends(get_db)):
+def list_messages(
+    conv_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     conv = db.get(Conversation, conv_id)
     if not conv:
         raise HTTPException(status_code=404, detail="会话不存在")
-    return (
+    messages = (
         db.query(Message)
         .filter(Message.conv_id == conv_id)
         .order_by(Message.created_at)
         .all()
     )
+    return message_dicts(db, messages, user.id)
+
+
+@router.post("/chat/messages/{message_id}/feedback")
+def feedback(
+    message_id: str,
+    data: FeedbackRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return save_feedback(db, message_id, user.id, data.rating, data.comment)
 
 
 @router.delete("/conversations/{conv_id}", status_code=204)

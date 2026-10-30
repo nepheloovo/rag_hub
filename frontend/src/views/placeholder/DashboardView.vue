@@ -92,8 +92,8 @@ const columns = [
     render: (row: Application) =>
       h(
         NTag,
-        { size: 'small', bordered: false, type: row.status === 'published' ? 'success' : row.status === 'reviewing' ? 'warning' : 'default' },
-        { default: () => ({ published: '已发布', reviewing: '评测中', draft: '草稿' } as any)[row.status] }
+        { size: 'small', bordered: false, type: row.status === 'published' ? 'success' : row.status === 'offline' ? 'warning' : 'default' },
+        { default: () => ({ published: '已发布', offline: '已下线', draft: '草稿' } as const)[row.status] }
       )
   },
   {

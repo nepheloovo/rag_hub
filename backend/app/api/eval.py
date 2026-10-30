@@ -14,7 +14,9 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.database import get_db
-from app.models import EvalCase, EvalSet, EvalSetItem, TraceRun, User
+from app.models import Application, Chunk, EvalCase, EvalSet, EvalSetItem, TraceRun, User
+from app.models.eval import EvalRun
+from app.services.eval_runner import case_readiness, run_summary, start_run, step_run
 
 router = APIRouter(prefix="/eval", tags=["评测集"])
 
@@ -25,6 +27,10 @@ def _case_dict(case: EvalCase, sets: list[dict] | None = None) -> dict:
         "question": case.question,
         "answer": case.answer,
         "reference_answer": case.reference_answer,
+        "expected_keywords": case.expected_keywords or [],
+        "forbidden_keywords": case.forbidden_keywords or [],
+        "require_citations": bool(case.require_citations),
+        "readiness": case_readiness(case),
         "contexts": case.contexts or [],
         "label": case.label,
         "status": case.status,
@@ -57,10 +63,19 @@ def _set_summary(db: Session, eval_set: EvalSet) -> dict:
     good = sum(1 for c in cases if c.label == "good")
     bad = sum(1 for c in cases if c.label == "bad")
     apps = sorted({c.app_name for c in cases if c.app_name})
+    app = db.get(Application, eval_set.app_id) if eval_set.app_id else None
+    latest = (
+        db.query(EvalRun).filter(EvalRun.set_id == eval_set.id)
+        .order_by(EvalRun.created_at.desc(), EvalRun.id.desc()).first()
+    )
     return {
         "id": eval_set.id,
         "name": eval_set.name,
         "description": eval_set.description,
+        "app_id": eval_set.app_id or "",
+        "app_name": app.name if app else "",
+        "is_release_gate": bool(eval_set.is_release_gate),
+        "latest_run": run_summary(db, latest, include_results=False) if latest else None,
         "created_by": eval_set.created_by,
         "created_at": eval_set.created_at,
         "updated_at": eval_set.updated_at,
@@ -163,6 +178,9 @@ class CaseCreate(BaseModel):
     question: str = ""
     answer: str = ""
     reference_answer: str = ""
+    expected_keywords: list[str] = Field(default_factory=list)
+    forbidden_keywords: list[str] = Field(default_factory=list)
+    require_citations: bool = False
     contexts: list = Field(default_factory=list)
     label: str = "good"
     status: str = "candidate"
@@ -239,6 +257,10 @@ def create_case(
         db.add(case)
         created = True
 
+    # Trace 回流与手工新增共用判定字段；重复回流仅覆盖显式提供的规则。
+    for field in ("expected_keywords", "forbidden_keywords", "require_citations"):
+        if created or field in data.model_fields_set:
+            setattr(case, field, getattr(data, field))
     db.flush()
     added = False
     if data.set_id:
@@ -262,6 +284,9 @@ class CaseUpdate(BaseModel):
     question: str | None = None
     answer: str | None = None
     reference_answer: str | None = None
+    expected_keywords: list[str] | None = None
+    forbidden_keywords: list[str] | None = None
+    require_citations: bool | None = None
     label: str | None = None
     status: str | None = None
     tags: list[str] | None = None
@@ -307,6 +332,8 @@ class SetCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     description: str = ""
     case_ids: list[str] = Field(default_factory=list)
+    app_id: str = ""
+    is_release_gate: bool = False
 
 
 @router.get("/sets")
@@ -324,10 +351,16 @@ def create_set(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    if not data.name.strip():
+        raise HTTPException(status_code=422, detail="评测集名称不能为空")
+    if data.app_id and not db.get(Application, data.app_id):
+        raise HTTPException(status_code=404, detail="应用不存在")
     eval_set = EvalSet(
         id=uuid.uuid4().hex,
         name=data.name.strip(),
         description=data.description,
+        app_id=data.app_id,
+        is_release_gate=data.is_release_gate,
         created_by=user.display_name or user.username,
     )
     db.add(eval_set)
@@ -361,6 +394,8 @@ def get_set(
 class SetUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    app_id: str | None = None
+    is_release_gate: bool | None = None
 
 
 @router.patch("/sets/{set_id}")
@@ -373,6 +408,10 @@ def update_set(
     eval_set = db.get(EvalSet, set_id)
     if not eval_set:
         raise HTTPException(status_code=404, detail="评测集不存在")
+    if data.name is not None and not data.name.strip():
+        raise HTTPException(status_code=422, detail="评测集名称不能为空")
+    if data.app_id and not db.get(Application, data.app_id):
+        raise HTTPException(status_code=404, detail="应用不存在")
     for key, value in data.model_dump(exclude_unset=True).items():
         if value is not None:
             setattr(eval_set, key, value)
@@ -462,6 +501,9 @@ def export_set(
                     "question": case.question,
                     "answer": case.answer,
                     "reference_answer": case.reference_answer,
+                    "expected_keywords": case.expected_keywords or [],
+                    "forbidden_keywords": case.forbidden_keywords or [],
+                    "require_citations": bool(case.require_citations),
                     "contexts": case.contexts or [],
                     "label": case.label,
                     "app_name": case.app_name,
@@ -481,3 +523,122 @@ def export_set(
             "Content-Disposition": f"attachment; filename=eval-set.jsonl; filename*=UTF-8''{quote(filename)}"
         },
     )
+
+
+def _get_set(db: Session, set_id: str) -> EvalSet:
+    eval_set = db.get(EvalSet, set_id)
+    if not eval_set:
+        raise HTTPException(status_code=404, detail="评测集不存在")
+    return eval_set
+
+
+@router.post("/sets/{set_id}/runs", status_code=201)
+def create_run(
+    set_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    run = start_run(db, _get_set(db, set_id), user.display_name or user.username)
+    return run_summary(db, run)
+
+
+@router.post("/sets/{set_id}/runs/{run_id}/step")
+def advance_run(
+    set_id: str, run_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    run = step_run(db, _get_set(db, set_id), run_id, user)
+    return run_summary(db, run)
+
+
+@router.post("/sets/{set_id}/run")
+def run_set(
+    set_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    eval_set = _get_set(db, set_id)
+    run = start_run(db, eval_set, user.display_name or user.username)
+    while run.status == "running":
+        run = step_run(db, eval_set, run.id, user)
+    return run_summary(db, run)
+
+
+@router.get("/sets/{set_id}/runs")
+def list_runs(
+    set_id: str, limit: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    _get_set(db, set_id)
+    runs = (
+        db.query(EvalRun).filter(EvalRun.set_id == set_id)
+        .order_by(EvalRun.created_at.desc(), EvalRun.id.desc()).limit(limit).all()
+    )
+    return [run_summary(db, run, include_results=False) for run in runs]
+
+
+@router.get("/design-rules")
+def design_rules(
+    app_id: str = "", db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    from app.services.eval_design import DESIGN_RULES, app_scene, default_rule_keys
+
+    app = db.get(Application, app_id) if app_id else None
+    if app_id and not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    return {
+        "rules": [{key: item[key] for key in ("key", "name", "description", "scenes")} for item in DESIGN_RULES],
+        "default_keys": default_rule_keys(app_scene(app) if app else "qa", bool(app and app.kb_ids)),
+    }
+
+
+class AiDesignRequest(BaseModel):
+    app_id: str
+    set_id: str | None = None
+    set_name: str | None = Field(None, max_length=128)
+    rule_keys: list[str] = Field(default_factory=list)
+    directions: str = ""
+    count: int = Field(10, ge=1, le=30)
+
+
+@router.post("/ai-design")
+def ai_design(
+    data: AiDesignRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    from app.services.eval_design import design_cases
+
+    app = db.get(Application, data.app_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    eval_set = _get_set(db, data.set_id) if data.set_id else None
+    if eval_set and eval_set.app_id and eval_set.app_id != app.id:
+        raise HTTPException(status_code=409, detail="目标评测集已绑定其他应用")
+    samples = (
+        db.query(Chunk.content).filter(Chunk.kb_id.in_(app.kb_ids or []))
+        .order_by(func.random()).limit(6).all()
+    ) if app.kb_ids else []
+    try:
+        designed, simulated = design_cases(
+            db, app, rule_keys=list(dict.fromkeys(data.rule_keys)), directions=data.directions,
+            count=data.count, knowledge_samples=[row[0] for row in samples],
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    actor = user.display_name or user.username
+    if not eval_set:
+        eval_set = EvalSet(
+            id=uuid.uuid4().hex, name=(data.set_name or "").strip() or f"{app.name} · AI 设计评测集"[:128],
+            app_id=app.id, created_by=actor,
+        )
+        db.add(eval_set)
+        db.flush()
+    elif not eval_set.app_id:
+        eval_set.app_id = app.id
+    cases = []
+    for item in designed:
+        case = EvalCase(
+            id=uuid.uuid4().hex, **item, app_id=app.id, app_name=app.name,
+            source="ai", status="confirmed", label="good", created_by=actor,
+        )
+        db.add(case)
+        db.flush()
+        db.add(EvalSetItem(id=uuid.uuid4().hex, set_id=eval_set.id, case_id=case.id))
+        cases.append(case)
+    eval_set.updated_at = datetime.now()
+    db.commit()
+    return {"set": _set_summary(db, eval_set), "cases": [_case_dict(case) for case in cases], "simulated": simulated}

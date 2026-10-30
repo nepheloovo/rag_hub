@@ -29,6 +29,7 @@
             <n-button size="small" quaternary>版本历史 (v{{ appVersion }})</n-button>
           </n-dropdown>
           <n-button size="small" quaternary type="error" @click="clearFlow">清空</n-button>
+          <n-button size="small" quaternary @click="emit('debug')">调试草稿</n-button>
         </n-space>
         <span class="canvas-hint">{{ problems.length ? '⚠ ' + problems.join('；') : '编排校验通过' }}</span>
       </div>
@@ -192,6 +193,7 @@ import { api, getApp, listKbs, listProviders, listTools, updateApp } from '@/api
 import type { Application, KnowledgeBase, Provider } from '@/api/types'
 
 const props = defineProps<{ appId: string }>()
+const emit = defineEmits<{ saved: [app: Application]; debug: [] }>()
 const message = useMessage()
 
 const nodeTypes = [
@@ -453,10 +455,11 @@ async function saveFlow() {
   saving.value = true
   try {
     const updated = await updateApp(props.appId, { flow: { nodes: flow.nodes, edges: flow.edges } })
+    emit('saved', updated)
     appVersion.value = updated.version
     const vs = await api(`/apps/${props.appId}/versions`)
     versions.value = vs.versions || []
-    message.success('编排已保存（版本 +1）')
+    message.success('编排草稿已保存')
   } catch (e: any) {
     message.error(e.message)
   } finally {
@@ -469,6 +472,7 @@ async function onVersionSelect(key: string) {
   try {
     
     const restored = await api(`/apps/${props.appId}/restore`, { method: 'POST', body: JSON.stringify({ version: Number(key) }) })
+    emit('saved', restored)
     flow.nodes = JSON.parse(JSON.stringify(restored.flow?.nodes || []))
     flow.edges = JSON.parse(JSON.stringify(restored.flow?.edges || []))
     appVersion.value = restored.version

@@ -86,5 +86,9 @@ def test_role_guard_on_mutations(client, anon_client):
     kb = client.post("/api/knowledge-bases", json={"name": "权限库"}).json()
     client.post(f"/api/knowledge-bases/{kb['id']}/documents", files={"file": ("a.md", io.BytesIO("# T\n\n内容。".encode()), "text/markdown")})
     app = client.post("/api/apps", json={"name": "权限应用", "app_type": "qa", "kb_ids": [kb["id"]]}).json()
+    # 未发布应用业务使用者不可用，也不能调试草稿
+    assert anon_client.post(f"/api/apps/{app['id']}/chat", headers=headers, json={"query": "x", "role": "user"}).status_code == 409
+    assert anon_client.post(f"/api/apps/{app['id']}/chat", headers=headers, json={"query": "x", "role": "user", "draft": True}).status_code == 403
+    assert client.post(f"/api/apps/{app['id']}/release", json={"release_notes": "v1"}).status_code == 200
     with anon_client.stream("POST", f"/api/apps/{app['id']}/chat", headers=headers, json={"query": "x", "role": "user"}) as resp:
         assert resp.status_code == 200

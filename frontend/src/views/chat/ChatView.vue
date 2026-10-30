@@ -102,6 +102,11 @@
                 查看调用链路 →
               </n-button>
             </div>
+            <MessageFeedback
+              v-if="m.role === 'assistant' && m.messageId && !m.streaming"
+              v-model:rating="m.feedback"
+              :message-id="m.messageId"
+            />
           </div>
           <div v-if="m.role === 'user'" class="avatar me">我</div>
         </div>
@@ -148,8 +153,9 @@ import {
   SendOutline
 } from '@vicons/ionicons5'
 import { listConversations, listKbs, getMessages, streamChat, listProviders, getDefaults } from '@/api'
-import type { ChatMessage, Conversation, KnowledgeBase, Provider, RefItem } from '@/api/types'
+import type { ChatDoneData, Conversation, FeedbackRating, KnowledgeBase, RefItem } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
+import MessageFeedback from '@/components/chat/MessageFeedback.vue'
 
 interface Msg {
   id: string
@@ -157,6 +163,8 @@ interface Msg {
   content: string
   streaming?: boolean
   refs?: RefItem[]
+  messageId?: string
+  feedback?: FeedbackRating
   meta?: { durationMs: number; tokens: number; fake: boolean; traceId?: string }
 }
 
@@ -253,7 +261,9 @@ async function openConversation(convId: string) {
       id: m.id,
       role: m.role,
       content: m.content,
-      refs: m.role === 'assistant' ? m.refs : undefined
+      refs: m.role === 'assistant' ? m.refs : undefined,
+      messageId: m.role === 'assistant' ? m.id : undefined,
+      feedback: m.feedback ?? 0
     }))
     activeConvId.value = convId
     scrollToBottom()
@@ -301,10 +311,12 @@ async function send(text?: string) {
         aiMsg.content += d.text
         scrollToBottom()
       } else if (event === 'done') {
-        const d = data as any
+        const d = data as ChatDoneData
         aiMsg.content = d.answer
         aiMsg.streaming = false
         aiMsg.refs = d.refs
+        aiMsg.messageId = d.message_id
+        aiMsg.feedback = 0
         aiMsg.meta = {
           durationMs: d.duration_ms,
           tokens: d.tokens?.total ?? 0,
@@ -327,6 +339,7 @@ async function send(text?: string) {
     if (!aiMsg.content) aiMsg.content = `⚠️ ${e.message}`
     message.error(e.message)
   } finally {
+    aiMsg.streaming = false
     sending.value = false
     scrollToBottom()
   }

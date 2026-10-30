@@ -190,6 +190,9 @@ def run_agent(db: Session, app: Application, query: str, contexts: str = "", rec
     llm, is_fake, model_name = build_llm(
         db, llm_ref=app.llm_ref or None, temperature=app.temperature or 0.2
     )
+    if rec:
+        rec.trace.model = model_name
+        rec.trace.models = {**(rec.trace.models or {}), "llm": model_name, "fake": is_fake}
 
     tools = db.query(Tool).filter(Tool.enabled.is_(True)).all()
     tool_by_name = {f"tool_{t.id.replace('-', '_')}": t for t in tools}

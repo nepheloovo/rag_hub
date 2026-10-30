@@ -66,11 +66,15 @@ def _execute_llm(db, node, variables, rec=None):
 
     system_prompt = render_template(data.get("system_prompt", ""), variables)
     user_prompt = render_template(data.get("user_prompt", "{{input}}"), variables)
-    llm, _, model_name = build_llm(
+    llm, is_fake, model_name = build_llm(
         db,
         llm_ref=data.get("llm_ref") or None,
         temperature=float(data.get("temperature") or 0.2),
     )
+    if rec:
+        models = rec.trace.models or {}
+        rec.trace.model = model_name
+        rec.trace.models = {**models, "llm": model_name, "fake": bool(models.get("fake") or is_fake)}
     chain = ChatPromptTemplate.from_messages(
         [("system", system_prompt), ("human", user_prompt)]
     ) | llm

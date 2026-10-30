@@ -44,7 +44,7 @@
               <n-tag size="small" :bordered="false" :color="{ color: kindMeta[app.app_kind].bg, textColor: kindMeta[app.app_kind].color }">
                 {{ kindMeta[app.app_kind].label }}
               </n-tag>
-              <n-tag v-if="app.status === 'reviewing'" size="small" type="warning" :bordered="false">内测</n-tag>
+              <n-tag size="small" :type="app.status === 'published' ? 'success' : 'default'" :bordered="false">{{ statusLabel(app.status) }}</n-tag>
             </div>
             <n-button quaternary circle size="tiny" @click="toggleFav(app.id)">
               <template #icon>
@@ -259,7 +259,7 @@ async function load() {
   loading.value = true
   try {
     const [appList, kbList, s] = await Promise.all([listApps(), listKbs(), getStatsOverview()])
-    apps.value = appList
+    apps.value = auth.role === 'business_user' ? appList.filter(app => app.status === 'published') : appList
     kbs.value = kbList
     stats.value = s
     loadRecent()
@@ -276,7 +276,7 @@ async function loadRecent() {
     const convs = await listConversations()
     const appName = (id: string) => apps.value.find(a => a.id === id)?.name || '未知应用'
     recentItems.value = convs
-      .filter(c => c.app_id)
+      .filter(c => c.app_id && apps.value.some(app => app.id === c.app_id))
       .slice(0, 6)
       .map(c => ({
         app_id: c.app_id!,
@@ -313,6 +313,7 @@ const categoryOptions = ['报告撰写', '智能客服', '制度与合同审校'
 const kbOptions = computed(() => kbs.value.map(k => ({ label: k.name, value: k.id })))
 
 const typeLabel = (t: string) => ({ qa: '问答应用', service: '智能客服', report: '报告分析' } as any)[t] || t
+const statusLabel = (s: string) => ({ published: '已发布', offline: '已下线', draft: '草稿' } as Record<string, string>)[s] || s
 
 async function doGenerate() {
   if (!genText.value.trim()) return

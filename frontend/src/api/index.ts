@@ -4,6 +4,14 @@ export { api } from './client'
 import type {
   AppDoneData,
   AppGenerateDraft,
+  AppReleases,
+  AppReleaseCheck,
+  AiDesignEvalInput,
+  AiDesignEvalResponse,
+  EvalRun,
+  EvalDesignRulesResponse,
+  MessageFeedbackInput,
+  MessageFeedbackResult,
   Application,
   ChatDoneData,
   ChatMessage,
@@ -122,9 +130,17 @@ export const getApp = (id: string) => api<Application>(`/apps/${id}`)
 export const updateApp = (id: string, data: Partial<Application>) =>
   api<Application>(`/apps/${id}`, { method: 'PUT', body: JSON.stringify(data) })
 export const deleteApp = (id: string) => api(`/apps/${id}`, { method: 'DELETE' })
-export const streamAppChat = (appId: string, body: { query: string; role: string; conversation_id?: string | null }) =>
+export const streamAppChat = (appId: string, body: { query: string; role: string; conversation_id?: string | null; draft?: boolean }) =>
   sseStream<AppDoneData | { text: string } | { message: string }>(`/apps/${appId}/chat`, body)
 export const listAppConversations = (appId: string) => listConversations(undefined, appId)
+export const getAppReleases = (appId: string) => api<AppReleases>(`/apps/${appId}/releases`)
+export const getAppReleaseCheck = (appId: string) => api<AppReleaseCheck>(`/apps/${appId}/release-check`)
+export const releaseApp = (appId: string, releaseNotes: string) =>
+  api<Application>(`/apps/${appId}/release`, { method: 'POST', body: JSON.stringify({ release_notes: releaseNotes }) })
+export const rollbackApp = (appId: string, versionId: string) =>
+  api<Application>(`/apps/${appId}/rollback`, { method: 'POST', body: JSON.stringify({ version_id: versionId }) })
+export const unpublishApp = (appId: string) =>
+  api<Application>(`/apps/${appId}/unpublish`, { method: 'POST' })
 export const generateApp = (description: string) =>
   api<{ draft: AppGenerateDraft; models: { llm: string; fake: boolean } }>('/apps/generate', {
     method: 'POST',
@@ -152,6 +168,11 @@ export const getPublicApp = (id: string) =>
   api<{ id: string; name: string; description: string; app_type: string; app_kind: string; opening: string; suggested_questions: string[]; show_refs: boolean }>(`/public/apps/${id}`)
 export const streamPublicChat = (appId: string, body: { query: string }) =>
   sseStream<AppDoneData | { text: string } | { message: string }>(`/public/apps/${appId}/chat`, { ...body, role: '访客' })
+
+export const submitMessageFeedback = (messageId: string, data: MessageFeedbackInput) =>
+  api<MessageFeedbackResult>(`/chat/messages/${messageId}/feedback`, { method: 'POST', body: JSON.stringify(data) })
+export const submitPublicMessageFeedback = (appId: string, messageId: string, data: MessageFeedbackInput) =>
+  api<MessageFeedbackResult>(`/public/apps/${appId}/messages/${messageId}/feedback`, { method: 'POST', body: JSON.stringify(data) })
 
 // ---------- 成员与审计 ----------
 export const listUsers = () => api<any[]>('/users')
@@ -253,6 +274,9 @@ export const createCase = (data: {
   question?: string
   answer?: string
   reference_answer?: string
+  expected_keywords?: string[]
+  forbidden_keywords?: string[]
+  require_citations?: boolean
   contexts?: any[]
   label?: string
   status?: string
@@ -273,10 +297,10 @@ export const updateCase = (id: string, data: Record<string, any>) =>
 export const deleteCase = (id: string) => api(`/eval/cases/${id}`, { method: 'DELETE' })
 
 export const listEvalSets = () => api<EvalSetSummary[]>('/eval/sets')
-export const createEvalSet = (data: { name: string; description?: string; case_ids?: string[] }) =>
+export const createEvalSet = (data: { name: string; description?: string; case_ids?: string[]; app_id?: string; is_release_gate?: boolean }) =>
   api<EvalSetSummary>('/eval/sets', { method: 'POST', body: JSON.stringify(data) })
 export const getEvalSet = (id: string) => api<EvalSetDetail>(`/eval/sets/${id}`)
-export const updateEvalSet = (id: string, data: { name?: string; description?: string }) =>
+export const updateEvalSet = (id: string, data: { name?: string; description?: string; app_id?: string; is_release_gate?: boolean }) =>
   api<EvalSetSummary>(`/eval/sets/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
 export const deleteEvalSet = (id: string) => api(`/eval/sets/${id}`, { method: 'DELETE' })
 export const addCasesToSet = (setId: string, caseIds: string[]) =>
@@ -286,3 +310,16 @@ export const addCasesToSet = (setId: string, caseIds: string[]) =>
   })
 export const removeCaseFromSet = (setId: string, caseId: string) =>
   api(`/eval/sets/${setId}/cases/${caseId}`, { method: 'DELETE' })
+
+export const createEvalRun = (setId: string) =>
+  api<EvalRun>(`/eval/sets/${setId}/runs`, { method: 'POST' })
+export const stepEvalRun = (setId: string, runId: string) =>
+  api<EvalRun>(`/eval/sets/${setId}/runs/${runId}/step`, { method: 'POST' })
+export const runEvalSet = (setId: string) =>
+  api<EvalRun>(`/eval/sets/${setId}/run`, { method: 'POST' })
+export const listEvalRuns = (setId: string, limit = 10) =>
+  api<EvalRun[]>(`/eval/sets/${setId}/runs?limit=${limit}`)
+export const getEvalDesignRules = (appId: string) =>
+  api<EvalDesignRulesResponse>(`/eval/design-rules?app_id=${encodeURIComponent(appId)}`)
+export const aiDesignEval = (data: AiDesignEvalInput) =>
+  api<AiDesignEvalResponse>('/eval/ai-design', { method: 'POST', body: JSON.stringify(data) })
